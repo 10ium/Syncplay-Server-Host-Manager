@@ -1,0 +1,64 @@
+name: Build and Release Standalone Executable
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Build Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller psutil
+
+      - name: Build Standalone Executable with PyInstaller
+        run: |
+          pyinstaller --noconsole --onefile `
+            --icon="assets/icon.ico" `
+            --add-data "assets;assets" `
+            --name="SyncplayServerHostManager" `
+            server_manager.py
+
+      - name: Verify Built Executable
+        run: |
+          Get-Item dist/SyncplayServerHostManager.exe
+
+      - name: Create Release and Upload Asset
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          name: "Syncplay Server Host Manager ${{ github.ref_name }}"
+          body: |
+            ## 🎬 Syncplay Server Host Manager ${{ github.ref_name }} (Windows)
+            
+            یک کنترل پنل سبک، مدرن، حرفه‌ای و متن‌باز برای مدیریت و میزبانی سرورهای خصوصی Syncplay روی ویندوز.
+            
+            ### 📦 دانلود فایل اجرایی بدون نیاز به نصب پایتون (Standalone):
+            فایل **`SyncplayServerHostManager.exe`** را از بخش Assets در پایین همین صفحه دانلود کرده و اجرا کنید.
+            
+            - **بدون نیاز به نصب پایتون یا هیچ کتابخانه اضافی**
+            - کاملاً تک‌فایل و پرتابل
+            - آیکون بومی و پشتیبانی از تم دارک
+            
+            📢 **کانال تلگرام:** [@vpnclashfa](https://t.me/vpnclashfa)
+          files: |
+            dist/SyncplayServerHostManager.exe
+            config.example.json
+            README.md

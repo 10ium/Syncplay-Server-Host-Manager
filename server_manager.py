@@ -16,10 +16,21 @@ from tkinter import ttk, messagebox, filedialog
 APP_NAME = "Syncplay Server Host Manager"
 APP_VERSION = "v1.0.0"
 APP_TITLE = f"🎬 {APP_NAME} {APP_VERSION} | کنترل پنل سرور سینک‌پلی"
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_FILE = os.path.join(APP_DIR, "config.json")
-ICON_ICO = os.path.join(APP_DIR, "assets", "icon.ico")
-ICON_PNG = os.path.join(APP_DIR, "assets", "icon.png")
+if getattr(sys, 'frozen', False):
+    EXE_DIR = os.path.dirname(sys.executable)
+    BUNDLE_DIR = getattr(sys, '_MEIPASS', EXE_DIR)
+else:
+    EXE_DIR = os.path.dirname(os.path.abspath(__file__))
+    BUNDLE_DIR = EXE_DIR
+
+APP_DIR = EXE_DIR
+CONFIG_FILE = os.path.join(EXE_DIR, "config.json")
+ICON_ICO = os.path.join(BUNDLE_DIR, "assets", "icon.ico")
+if not os.path.isfile(ICON_ICO):
+    ICON_ICO = os.path.join(EXE_DIR, "assets", "icon.ico")
+ICON_PNG = os.path.join(BUNDLE_DIR, "assets", "icon.png")
+if not os.path.isfile(ICON_PNG):
+    ICON_PNG = os.path.join(EXE_DIR, "assets", "icon.png")
 TELEGRAM_CHANNEL_URL = "https://t.me/vpnclashfa"
 
 # Universal Default Configuration (No hardcoded personal credentials)

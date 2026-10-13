@@ -1,5 +1,19 @@
 @echo off
-title Syncplay Server (Port 24680)
-echo Starting Syncplay Server on port 24680 with password 2210...
-"C:\Program Files (x86)\Syncplay\syncplayServer.exe" --port 24680 --password 2210
-pause
+setlocal
+set PORT=8999
+if not "%1"=="" set PORT=%1
+
+echo ========================================================
+echo   Starting Syncplay Server
+echo   Port: %PORT% (TCP)
+echo ========================================================
+
+if exist "%ProgramFiles(x86)%\Syncplay\syncplayServer.exe" (
+    "%ProgramFiles(x86)%\Syncplay\syncplayServer.exe" --port %PORT%
+) else if exist "%ProgramFiles%\Syncplay\syncplayServer.exe" (
+    "%ProgramFiles%\Syncplay\syncplayServer.exe" --port %PORT%
+) else (
+    echo [ERROR] syncplayServer.exe was not found in Program Files.
+    echo Please make sure Syncplay is installed from https://syncplay.pl
+    pause
+)

@@ -35,10 +35,18 @@
 
 ---
 
-## 🚀 راهنمای نصب و راه‌اندازی (Quick Start)
+## 📥 دانلود فایل اجرایی آماده (بدون نیاز به نصب پایتون)
 
-### پیش‌نیازها:
-1. پایتون نسخه ۳.۸ یا بالاتر نصب شده باشد ([Python.org](https://www.python.org/downloads/)).
+اگر نمی‌خواهید درگیر نصب پایتون و پیش‌نیازها شوید، نسخه کامپایل‌شده و تک‌فایلی برنامه را مستقیماً دانلود و اجرا کنید:
+
+👉 **[دانلود آخرین نسخه SyncplayServerHostManager.exe از بخش Releases گیت‌هاب](https://github.com/10ium/Syncplay-Server-Host-Manager/releases)**
+
+---
+
+## 🚀 راهنمای اجرای سورس‌کد با پایتون (Manual Setup)
+
+اگر مایلید مستقیماً از سورس‌کد پایتون استفاده کنید:
+1. پایتون نسخه ۳.۸ یا بالاتر نصب باشد ([Python.org](https://www.python.org/downloads/)).
 2. برنامه رسمی **Syncplay** روی سیستم نصب باشد ([Syncplay.pl](https://syncplay.pl/)).
 3. کتابخانه پایتون `psutil`:
 ```bash

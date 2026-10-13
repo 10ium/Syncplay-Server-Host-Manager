@@ -12,6 +12,7 @@ dist/
 
 # Backups & local files
 .backups/
+.agents/
 *.bak
 test_client.py
 test_stats.db

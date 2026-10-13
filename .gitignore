@@ -1,0 +1,15 @@
+# User personal config (contains private password and IP)
+config.json
+
+# Python cache & build
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Backups & local files
+.backups/
+*.bak
+test_client.py
+test_stats.db
+*.log

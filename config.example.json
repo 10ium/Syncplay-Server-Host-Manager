@@ -1,0 +1,10 @@
+{
+  "port": "24680",
+  "password": "your_server_password",
+  "room": "movie",
+  "public_ip": "",
+  "local_ip": "",
+  "syncplay_dir": "",
+  "enable_logs": true,
+  "enable_sound_alerts": true
+}

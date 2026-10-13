@@ -25,6 +25,12 @@ else:
 
 APP_DIR = EXE_DIR
 CONFIG_FILE = os.path.join(EXE_DIR, "config.json")
+if not os.path.isfile(CONFIG_FILE):
+    parent_cfg = os.path.join(os.path.dirname(EXE_DIR), "config.json")
+    if os.path.isfile(parent_cfg):
+        CONFIG_FILE = parent_cfg
+    elif os.path.isfile("config.json"):
+        CONFIG_FILE = os.path.abspath("config.json")
 ICON_ICO = os.path.join(BUNDLE_DIR, "assets", "icon.ico")
 if not os.path.isfile(ICON_ICO):
     ICON_ICO = os.path.join(EXE_DIR, "assets", "icon.ico")
@@ -106,15 +112,31 @@ def save_config(cfg):
         print(f"Error saving config: {e}")
 
 def detect_local_ip():
-    """Detect local IPv4 address connected to the LAN router"""
+    """Detect local IPv4 address connected to the LAN router (bypassing VPN/TUN)"""
+    gw = detect_gateway_ip() or "192.168.1.1"
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
+        s.connect((gw, 80))
         ip = s.getsockname()[0]
         s.close()
-        return ip
+        if ip and not ip.startswith("198.18.") and not ip.startswith("127.") and not ip.startswith("169.254."):
+            return ip
     except Exception:
-        return "127.0.0.1"
+        pass
+
+    # Fallback: scan physical network adapters ignoring VPN/TUN/virtual
+    try:
+        for iface, addrs in psutil.net_if_addrs().items():
+            if any(bad in iface.lower() for bad in ["bettbox", "clash", "sing-box", "tun", "tap", "loopback", "virtual"]):
+                continue
+            for addr in addrs:
+                if addr.family == socket.AF_INET:
+                    ip = addr.address
+                    if (ip.startswith("192.168.") or ip.startswith("10.") or (ip.startswith("172.") and 16 <= int(ip.split('.')[1]) <= 31)) and not ip.startswith("198.18."):
+                        return ip
+    except Exception:
+        pass
+    return "192.168.1.6"
 
 def get_syncplay_pid():
     for proc in psutil.process_iter(['pid', 'name']):
@@ -988,31 +1010,65 @@ class SyncplayManagerApp:
         port = self.entry_port.get().strip()
         pub_ip = self.entry_public_ip.get().strip()
         if not pub_ip or not port.isdigit():
-            messagebox.showerror("خطا", "لطفاً آی‌پی عمومی و شماره پورت را وارد کنید.")
+            messagebox.showerror("خطا", "لطفاً آی‌پی عمومی اینترنت و شماره پورت را وارد کنید.")
             return
 
-        self.log(f"در حال تست پورت {port} روی {pub_ip} از طریق اینترنت...")
-        self.btn_test_port.config(text="در حال تست...", state="disabled")
+        pid = get_syncplay_pid()
+        if not pid:
+            self.log("هشدار تست پورت: سرور سینک‌پلی خاموش است! برای تست باز بودن، بهتر است ابتدا سرور را روشن کنید.")
+            if not messagebox.askyesno(
+                "سرور خاموش است ⚠️",
+                "سرور سینک‌پلی در حال حاضر خاموش است.\nاگر سرور روشن نباشد، پورت باز حتی در صورت فوروارد بودن پاسخی به تست نمی‌دهد.\n\nآیا مایلید با این وجود تست استعلام از اینترنت انجام شود؟"
+            ):
+                return
+
+        self.log(f"در حال استعلام وضعیت پورت {port} روی آی‌پی {pub_ip} از طریق سرورهای بین‌المللی اینترنت...")
+        self.btn_test_port.config(text="در حال استعلام از اینترنت...", state="disabled")
 
         def _test():
-            success = False
+            result_type = None  # "success", "refused", "timeout", "error"
+            detail_msg = ""
             try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.settimeout(5)
-                res = s.connect_ex((pub_ip, int(port)))
-                s.close()
-                success = (res == 0)
-            except Exception:
-                pass
+                data = urllib.parse.urlencode({'port': str(port), 'IP': str(pub_ip)}).encode()
+                req = urllib.request.Request(
+                    'https://canyouseeme.org/',
+                    data=data,
+                    headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+                )
+                with urllib.request.urlopen(req, timeout=12) as r:
+                    html = r.read().decode('utf-8')
+                    if 'Success:' in html:
+                        result_type = "success"
+                        detail_msg = f"پورت {port} روی آی‌پی {pub_ip} از طریق اینترنت کاملاً باز و پاسخگو است! ✅"
+                    elif 'Error:' in html:
+                        if 'refused' in html.lower():
+                            result_type = "refused"
+                            detail_msg = f"سیگنال از اینترنت به مودم و سیستم شما رسید! پورت فوروارد شده اما برنامه‌ای روی پورت {port} گوش‌به‌زنگ نیست (Connection refused). مطمئن شوید سرور روشن است."
+                        elif 'timed out' in html.lower():
+                            result_type = "timeout"
+                            detail_msg = f"پورت {port} از اینترنت پاسخی نداد (Connection timed out).\nمودم یا فایروال ترافیک را به سمت سیستم هدایت نکرده است."
+                        else:
+                            result_type = "error"
+                            detail_msg = f"پورت {port} از اینترنت پاسخ نداد."
+            except Exception as e:
+                result_type = "network_err"
+                detail_msg = f"خطا در برقراری ارتباط با سرور تست آنلاین: {e}"
 
             def _done():
                 self.btn_test_port.config(text="🔍 تست آنلاین پورت مودم از اینترنت", state="normal")
-                if success:
-                    self.log(f"نتیجه تست: پورت {port} مودم کاملاً باز و آماده اتصال است! ✅")
-                    messagebox.showinfo("موفقیت‌آمیز", f"پورت {port} روی آی‌پی {pub_ip} با موفقیت تایید شد!\nمودم و سرور کاملاً آنلاین و در دسترس هستند.")
+                if result_type == "success":
+                    self.log(f"نتیجه تست پورت: {detail_msg}")
+                    messagebox.showinfo("پورت کاملاً باز است! 🎉", detail_msg)
+                elif result_type == "refused":
+                    self.log(f"نتیجه تست پورت: {detail_msg}")
+                    messagebox.showwarning("ارتباط برقرار شد اما سرور پاسخ نداد ⚠️", detail_msg)
+                elif result_type == "timeout":
+                    self.log(f"نتیجه تست پورت: {detail_msg}")
+                    messagebox.showerror("پورت پاسخ نداد ❌", f"{detail_msg}\n\nنکات قابل بررسی:\n۱. مطمئن شوید سرور را روشن کرده‌اید.\n۲. آی‌پی عمومی مودم را استعلام کنید (شاید مودم ریستارت شده باشد).\n۳. تنظیم Virtual Server مودم را بررسی کنید.")
                 else:
-                    self.log(f"نتیجه تست: پورت {port} پاسخ نداد (سرور باید روشن باشد). ⚠️")
-                    messagebox.showwarning("توجه", f"پورت {port} پاسخ نداد.\nمطمئن شوید سرور روشن است و مودم فوروارد شده است.")
+                    self.log(f"نتیجه تست: {detail_msg}")
+                    if messagebox.askyesno("تست آنلاین در مرورگر", f"{detail_msg}\n\nآیا مایلید سایت تست پورت مستقیماً در مرورگر شما باز شود؟"):
+                        webbrowser.open(f"https://canyouseeme.org/")
             self.root.after(0, _done)
 
         threading.Thread(target=_test, daemon=True).start()

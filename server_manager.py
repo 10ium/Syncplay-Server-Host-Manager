@@ -12,18 +12,41 @@ import psutil
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
-CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+# Application Metadata
+APP_NAME = "Syncplay Server Host Manager"
+APP_VERSION = "v1.0.0"
+APP_TITLE = f"🎬 {APP_NAME} {APP_VERSION} | کنترل پنل سرور سینک‌پلی"
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(APP_DIR, "config.json")
+ICON_ICO = os.path.join(APP_DIR, "assets", "icon.ico")
+ICON_PNG = os.path.join(APP_DIR, "assets", "icon.png")
+TELEGRAM_CHANNEL_URL = "https://t.me/vpnclashfa"
 
+# Universal Default Configuration (No hardcoded personal credentials)
 DEFAULT_CONFIG = {
-    "port": "24680",
-    "password": "2210",
-    "room": "movie",
-    "public_ip": "5.232.118.106",
-    "local_ip": "192.168.1.6",
+    "port": "8999",  # Official Syncplay default port
+    "password": "",
+    "room": "cinema",
+    "public_ip": "",
+    "local_ip": "",
     "syncplay_dir": "",
+    "router_gateway_ip": "192.168.1.1",
     "enable_logs": True,
     "enable_sound_alerts": True
 }
+
+def detect_gateway_ip():
+    """Detect local router default gateway IP address"""
+    try:
+        # Use net route or ipconfig
+        cmd = 'powershell -NoProfile -Command "(Get-NetRoute -DestinationPrefix \'0.0.0.0/0\' | Where-Object { $_.NextHop -ne \'0.0.0.0\' } | Select-Object -First 1 -ExpandProperty NextHop)"'
+        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, errors='replace')
+        gw = res.stdout.strip()
+        if gw and len(gw.split('.')) == 4:
+            return gw
+    except Exception:
+        pass
+    return "192.168.1.1"
 
 def find_syncplay_installation(custom_dir=""):
     """Auto-detect Syncplay directory across standard Windows locations or portable folder"""
@@ -31,24 +54,30 @@ def find_syncplay_installation(custom_dir=""):
     if custom_dir and os.path.isdir(custom_dir):
         candidates.append(custom_dir)
     
-    # Common Windows installation directories
+    # Common Windows installation directories (64-bit, 32-bit, local appdata, portable)
     prog_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
     prog_64 = os.environ.get("ProgramFiles", r"C:\Program Files")
+    local_appdata = os.environ.get("LocalAppData", "")
+    
     candidates.extend([
         os.path.join(prog_x86, "Syncplay"),
         os.path.join(prog_64, "Syncplay"),
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "Syncplay"),
+        os.path.join(APP_DIR, "Syncplay"),
         r"C:\Program Files (x86)\Syncplay",
         r"C:\Program Files\Syncplay"
     ])
+    if local_appdata:
+        candidates.append(os.path.join(local_appdata, "Programs", "Syncplay"))
     
     for c in candidates:
-        server_exe = os.path.join(c, "syncplayServer.exe")
-        if os.path.isfile(server_exe):
-            return c
+        if c and os.path.isdir(c):
+            server_exe = os.path.join(c, "syncplayServer.exe")
+            if os.path.isfile(server_exe):
+                return c
     return ""
 
 def load_config():
+    """Load configuration from config.json, fallback to DEFAULT_CONFIG"""
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -66,6 +95,7 @@ def save_config(cfg):
         print(f"Error saving config: {e}")
 
 def detect_local_ip():
+    """Detect local IPv4 address connected to the LAN router"""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
@@ -73,7 +103,7 @@ def detect_local_ip():
         s.close()
         return ip
     except Exception:
-        return "192.168.1.6"
+        return "127.0.0.1"
 
 def get_syncplay_pid():
     for proc in psutil.process_iter(['pid', 'name']):
@@ -121,28 +151,35 @@ def format_speed(bps):
 class SyncplayManagerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("کنترل پنل سرور سینک‌پلی | Syncplay Server Manager")
+        self.root.title(APP_TITLE)
         
+        # Set App Icon (.ico and .png fallback)
+        self.apply_app_icon()
+
         # Responsive & Resizable window with full Maximize support
-        window_width = 780
-        window_height = 920
+        window_width = 800
+        window_height = 930
         screen_w = root.winfo_screenwidth()
         screen_h = root.winfo_screenheight()
         pos_x = max(0, (screen_w - window_width) // 2)
         pos_y = max(0, (screen_h - window_height) // 2 - 25)
         self.root.geometry(f"{window_width}x{window_height}+{pos_x}+{pos_y}")
-        self.root.minsize(700, 780)
+        self.root.minsize(720, 800)
         self.root.resizable(True, True)
 
         self.config = load_config()
         self.server_process = None
         self.server_start_time = None
-        self.running_port = int(self.config.get("port", "24680"))
+        
+        # Fallback values if config fields are empty
+        configured_port = self.config.get("port") or "8999"
+        self.running_port = int(configured_port) if configured_port.isdigit() else 8999
         self.is_monitoring = True
 
-        # Syncplay paths
+        # Syncplay paths & Router Gateway
         self.syncplay_dir = find_syncplay_installation(self.config.get("syncplay_dir", ""))
         self.local_ip = self.config.get("local_ip") or detect_local_ip()
+        self.gateway_ip = self.config.get("router_gateway_ip") or detect_gateway_ip()
 
         # Stats & Traffic Tracking
         self.initial_proc_io = None
@@ -163,6 +200,7 @@ class SyncplayManagerApp:
         self.accent_yellow = "#f39c12"
         self.accent_purple = "#a27bfa"
         self.accent_cyan = "#00d2d3"
+        self.telegram_color = "#229ED9"
 
         self.root.configure(bg=self.bg_color)
         self.setup_ui()
@@ -172,36 +210,85 @@ class SyncplayManagerApp:
         self.check_firewall_status_real()
         self.start_monitoring_thread()
 
+    def apply_app_icon(self):
+        """Set native window icon"""
+        if os.path.isfile(ICON_ICO):
+            try:
+                self.root.iconbitmap(ICON_ICO)
+            except Exception:
+                pass
+        if os.path.isfile(ICON_PNG):
+            try:
+                photo = tk.PhotoImage(file=ICON_PNG)
+                self.root.iconphoto(True, photo)
+            except Exception:
+                pass
+
     def setup_ui(self):
         container = tk.Frame(self.root, bg=self.bg_color, padx=16, pady=10)
         container.pack(fill="both", expand=True)
 
-        # 1. Header (Title & Help Button)
+        # 1. Header (Title, Version, Telegram Channel, and CGNAT Guide)
         header = tk.Frame(container, bg=self.card_bg, padx=18, pady=10, highlightthickness=1, highlightbackground="#2d2d48")
         header.pack(fill="x", pady=(0, 6))
 
         h_top = tk.Frame(header, bg=self.card_bg)
         h_top.pack(fill="x")
 
+        # Right: Title & Version Badge
+        title_box = tk.Frame(h_top, bg=self.card_bg)
+        title_box.pack(side="right")
+
         tk.Label(
-            h_top,
-            text="🎬 کنترل پنل سرور سینک‌پلی",
-            font=("Segoe UI", 16, "bold"),
+            title_box,
+            text=f"🎬 {APP_NAME}",
+            font=("Segoe UI", 15, "bold"),
             bg=self.card_bg,
             fg=self.accent_blue,
             justify="right"
         ).pack(side="right")
 
+        lbl_ver = tk.Label(
+            title_box,
+            text=APP_VERSION,
+            font=("Segoe UI", 8, "bold"),
+            bg=self.subcard_bg,
+            fg=self.accent_cyan,
+            padx=6,
+            pady=2
+        )
+        lbl_ver.pack(side="right", padx=(0, 8))
+
+        # Left: Telegram Channel & CGNAT Guide Buttons
+        left_actions = tk.Frame(h_top, bg=self.card_bg)
+        left_actions.pack(side="left")
+
+        btn_channel = tk.Button(
+            left_actions,
+            text="📢 کانال تلگرام: @vpnclashfa",
+            font=("Segoe UI", 9, "bold"),
+            bg=self.telegram_color,
+            fg="#ffffff",
+            activebackground="#1e88e5",
+            activeforeground="#ffffff",
+            cursor="hand2",
+            padx=10,
+            pady=4,
+            relief="flat",
+            command=lambda: webbrowser.open(TELEGRAM_CHANNEL_URL)
+        )
+        btn_channel.pack(side="left", padx=(0, 8))
+
         btn_guide = tk.Button(
-            h_top,
-            text="📖 راهنمای مودم و تست CGNAT",
+            left_actions,
+            text="📖 راهنمای مودم و CGNAT",
             font=("Segoe UI", 9, "bold"),
             bg="#2c3e50",
             fg=self.accent_cyan,
             activebackground="#34495e",
             activeforeground="#ffffff",
             cursor="hand2",
-            padx=12,
+            padx=10,
             pady=4,
             relief="flat",
             command=self.open_cgnat_guide
@@ -210,12 +297,12 @@ class SyncplayManagerApp:
 
         tk.Label(
             header,
-            text="مدیریت آسان سرور، استعلام خودکار آی‌پی، آمار اختصاصی ترافیک و فرمت اشتراک تلگرام",
+            text="کنترل پنل جامع و سبک برای اجرای سرور سینک‌پلی، استعلام خودکار شبکه و فرمت هوشمند تلگرام",
             font=("Segoe UI", 9),
             bg=self.card_bg,
             fg=self.subtext_color,
             justify="right"
-        ).pack(anchor="e", pady=(2, 0))
+        ).pack(anchor="e", pady=(4, 0))
 
         # 2. Status & Control Banner
         status_card = tk.Frame(container, bg=self.card_bg, padx=18, pady=12, highlightthickness=1, highlightbackground="#2d2d48")
@@ -433,8 +520,8 @@ class SyncplayManagerApp:
         pub_bar.pack(fill="x", pady=2)
 
         tk.Label(pub_bar, text="آی‌پی عمومی مودم (Public IP):", font=("Segoe UI", 9), bg=self.card_bg, fg=self.text_color).pack(side="right", padx=(4, 0))
-        self.entry_public_ip = tk.Entry(pub_bar, font=("Segoe UI", 10), bg=self.input_bg, fg=self.accent_yellow, insertbackground="white", width=16, relief="flat", justify="center")
-        self.entry_public_ip.insert(0, self.config.get("public_ip", "5.232.118.106"))
+        self.entry_public_ip = tk.Entry(pub_bar, font=("Segoe UI", 10), bg=self.input_bg, fg=self.accent_yellow, insertbackground="white", width=18, relief="flat", justify="center")
+        self.entry_public_ip.insert(0, self.config.get("public_ip", ""))
         self.entry_public_ip.pack(side="right", padx=(4, 10))
 
         btn_detect_pub = tk.Button(
@@ -454,7 +541,7 @@ class SyncplayManagerApp:
         loc_bar.pack(fill="x", pady=2)
 
         tk.Label(loc_bar, text="آی‌پی داخلی سیستم (Local IP):", font=("Segoe UI", 9), bg=self.card_bg, fg=self.text_color).pack(side="right", padx=(4, 0))
-        self.entry_local_ip = tk.Entry(loc_bar, font=("Segoe UI", 10), bg=self.input_bg, fg=self.accent_green, insertbackground="white", width=16, relief="flat", justify="center")
+        self.entry_local_ip = tk.Entry(loc_bar, font=("Segoe UI", 10), bg=self.input_bg, fg=self.accent_green, insertbackground="white", width=18, relief="flat", justify="center")
         self.entry_local_ip.insert(0, self.local_ip)
         self.entry_local_ip.pack(side="right", padx=(4, 10))
 
@@ -470,7 +557,7 @@ class SyncplayManagerApp:
         )
         btn_detect_loc.pack(side="left")
 
-        # 6. Settings Card
+        # 6. Settings Card (Port, Password, Room, Sound Alerts)
         cfg_card = tk.Frame(container, bg=self.card_bg, padx=18, pady=8, highlightthickness=1, highlightbackground="#2d2d48")
         cfg_card.pack(fill="x", pady=3)
 
@@ -524,29 +611,81 @@ class SyncplayManagerApp:
         f_port.pack(side="right", padx=(10, 0))
         tk.Label(f_port, text="پورت سرور:", font=("Segoe UI", 9), bg=self.card_bg, fg=self.text_color).pack(anchor="e")
         self.entry_port = tk.Entry(f_port, font=("Segoe UI", 10), bg=self.input_bg, fg=self.text_color, insertbackground="white", width=8, relief="flat", justify="center")
-        self.entry_port.insert(0, self.config.get("port", "24680"))
+        self.entry_port.insert(0, str(self.config.get("port") or "8999"))
         self.entry_port.pack(anchor="e", pady=(2, 0))
 
         f_pass = tk.Frame(cfg_form, bg=self.card_bg)
         f_pass.pack(side="right", padx=(10, 0))
         tk.Label(f_pass, text="رمز عبور:", font=("Segoe UI", 9), bg=self.card_bg, fg=self.text_color).pack(anchor="e")
         self.entry_pass = tk.Entry(f_pass, font=("Segoe UI", 10), bg=self.input_bg, fg=self.text_color, insertbackground="white", width=12, relief="flat", justify="center")
-        self.entry_pass.insert(0, self.config.get("password", "2210"))
+        self.entry_pass.insert(0, self.config.get("password", ""))
         self.entry_pass.pack(anchor="e", pady=(2, 0))
 
         f_room = tk.Frame(cfg_form, bg=self.card_bg)
         f_room.pack(side="right", padx=(10, 0))
         tk.Label(f_room, text="اتاق مشترک:", font=("Segoe UI", 9), bg=self.card_bg, fg=self.text_color).pack(anchor="e")
         self.entry_room = tk.Entry(f_room, font=("Segoe UI", 10), bg=self.input_bg, fg=self.text_color, insertbackground="white", width=10, relief="flat", justify="center")
-        self.entry_room.insert(0, self.config.get("room", "movie"))
+        self.entry_room.insert(0, self.config.get("room") or "cinema")
         self.entry_room.pack(anchor="e", pady=(2, 0))
 
-        # 7. Quick Shortcuts & Path Config
+        # 7. Syncplay Installation Path & Shortcuts
         sc_card = tk.Frame(container, bg=self.card_bg, padx=18, pady=8, highlightthickness=1, highlightbackground="#2d2d48")
         sc_card.pack(fill="x", pady=3)
 
+        # Path Selection Row
+        path_box = tk.Frame(sc_card, bg=self.card_bg)
+        path_box.pack(fill="x", pady=(0, 6))
+
+        tk.Label(
+            path_box,
+            text="📁 مسیر نصب سینک‌پلی:",
+            font=("Segoe UI", 9, "bold"),
+            bg=self.card_bg,
+            fg=self.accent_purple
+        ).pack(side="right", padx=(4, 0))
+
+        self.entry_path = tk.Entry(
+            path_box,
+            font=("Segoe UI", 9),
+            bg=self.input_bg,
+            fg=self.text_color,
+            insertbackground="white",
+            relief="flat"
+        )
+        self.entry_path.insert(0, self.syncplay_dir or "مسیر شناسایی نشد (دستی انتخاب کنید)")
+        self.entry_path.pack(side="right", fill="x", expand=True, padx=(8, 8))
+
+        btn_browse_path = tk.Button(
+            path_box,
+            text="📂 انتخاب پوشه...",
+            font=("Segoe UI", 8),
+            bg=self.subcard_bg,
+            fg=self.accent_cyan,
+            cursor="hand2",
+            padx=10,
+            pady=2,
+            relief="flat",
+            command=self.choose_syncplay_path
+        )
+        btn_browse_path.pack(side="left", padx=(4, 0))
+
+        btn_auto_path = tk.Button(
+            path_box,
+            text="🔍 شناسایی خودکار",
+            font=("Segoe UI", 8),
+            bg=self.subcard_bg,
+            fg=self.subtext_color,
+            cursor="hand2",
+            padx=8,
+            pady=2,
+            relief="flat",
+            command=self.auto_detect_syncplay_path
+        )
+        btn_auto_path.pack(side="left")
+
+        # Shortcuts Row
         sc_bar = tk.Frame(sc_card, bg=self.card_bg)
-        sc_bar.pack(fill="x")
+        sc_bar.pack(fill="x", pady=(2, 0))
 
         tk.Label(
             sc_bar,
@@ -580,21 +719,9 @@ class SyncplayManagerApp:
             padx=14,
             pady=4,
             relief="flat",
-            command=lambda: webbrowser.open("http://192.168.1.1")
+            command=self.open_modem_panel
         )
         btn_modem.pack(side="right", padx=(0, 12))
-
-        btn_path = tk.Button(
-            sc_bar,
-            text="📁 تغییر مسیر نصب سینک‌پلی",
-            font=("Segoe UI", 8),
-            bg=self.subcard_bg,
-            fg=self.subtext_color,
-            cursor="hand2",
-            relief="flat",
-            command=self.choose_syncplay_path
-        )
-        btn_path.pack(side="left")
 
         # 8. Live Logs
         log_card = tk.Frame(container, bg=self.card_bg, padx=18, pady=8, highlightthickness=1, highlightbackground="#2d2d48")
@@ -653,6 +780,23 @@ class SyncplayManagerApp:
         scrollbar.pack(side="right", fill="y")
         self.log_text.config(yscrollcommand=scrollbar.set)
 
+    def open_modem_panel(self):
+        gw = self.gateway_ip or "192.168.1.1"
+        webbrowser.open(f"http://{gw}")
+
+    def auto_detect_syncplay_path(self):
+        found = find_syncplay_installation()
+        if found:
+            self.syncplay_dir = found
+            self.config["syncplay_dir"] = found
+            save_config(self.config)
+            self.entry_path.delete(0, "end")
+            self.entry_path.insert(0, found)
+            self.log(f"مسیر سینک‌پلی به طور خودکار پیدا شد: {found}")
+            messagebox.showinfo("موفقیت", f"مسیر نصب سینک‌پلی با موفقیت پیدا شد:\n{found}")
+        else:
+            messagebox.showwarning("یافت نشد", "پوشه نصب سینک‌پلی در مسیرهای پیش‌فرض پیدا نشد.\nلطفاً دکمه 'انتخاب پوشه...' را بزنید و محل نصب را مشخص کنید.")
+
     def choose_syncplay_path(self):
         d = filedialog.askdirectory(title="پوشه نصب برنامه Syncplay را انتخاب کنید")
         if d:
@@ -661,24 +805,31 @@ class SyncplayManagerApp:
                 self.syncplay_dir = d
                 self.config["syncplay_dir"] = d
                 save_config(self.config)
+                self.entry_path.delete(0, "end")
+                self.entry_path.insert(0, d)
                 self.log(f"مسیر برنامه تنظیم شد: {d}")
                 messagebox.showinfo("موفقیت", f"مسیر Syncplay با موفقیت ذخیره شد:\n{d}")
             else:
-                messagebox.showerror("خطا", f"فایل syncplayServer.exe در این پوشه یافت نشد:\n{d}")
+                messagebox.showerror("خطا", f"فایل syncplayServer.exe در این پوشه یافت نشد:\n{d}\nمطمئن شوید پوشه اصلی برنامه را انتخاب کرده‌اید.")
 
     def open_cgnat_guide(self):
-        """Display an exhaustive, comprehensive CGNAT & Router guide window"""
+        """Display an exhaustive, comprehensive CGNAT & Router guide window with standard default port"""
         win = tk.Toplevel(self.root)
         win.title("راهنمای تشخیص CGNAT و تنظیم پورت انواع مودم‌ها")
-        win.geometry("680x640")
+        win.geometry("700x660")
         win.configure(bg=self.bg_color)
+        if os.path.isfile(ICON_ICO):
+            try:
+                win.iconbitmap(ICON_ICO)
+            except Exception:
+                pass
 
         c = tk.Frame(win, bg=self.card_bg, padx=16, pady=16)
         c.pack(fill="both", expand=True, padx=12, pady=12)
 
         tk.Label(
             c,
-            text="📖 راهنمای کامل تشخیص CGNAT و فوروارد پورت در مودم‌ها",
+            text="📖 راهنمای کامل تشخیص CGNAT و فوروارد پورت در انواع مودم‌ها",
             font=("Segoe UI", 13, "bold"),
             bg=self.card_bg,
             fg=self.accent_blue,
@@ -688,50 +839,55 @@ class SyncplayManagerApp:
         txt = tk.Text(c, bg="#101018", fg="#cdd6f4", font=("Segoe UI", 9), wrap="word", relief="flat")
         txt.pack(fill="both", expand=True)
 
-        guide_content = """۱. چطور بفهمیم اینترنت ما پشت CGNAT (نات اپراتور) است یا آی‌پی اختصاصی داریم؟
+        guide_content = """۱. چطور بفهمیم اینترنت ما پشت CGNAT (نات اپراتور) است یا آی‌پی عمومی داریم؟
 --------------------------------------------------------------------------------
-- وارد صفحه تنظیمات مودم خود شوید (معمولاً http://192.168.1.1).
-- به بخش Status یا Device Info بروید و مقدار WAN IP Address را ببینید.
+- وارد پنل تنظیمات مودم خود شوید (معمولاً http://192.168.1.1 یا http://192.168.0.1).
+- به بخش Status یا Device Info یا WAN Status بروید و مقدار WAN IP Address را بررسی کنید.
 - اکنون یک سایت استعلام آی‌پی مانند https://api.ipify.org را باز کنید.
 
 نتیجه:
-الف) اگر آی‌پی صفحه مودم شما با سایتی که باز کردید یکی باشد: شما آی‌پی عمومی (Public IP) دارید و پورت فوروارد ۱۰۰٪ کار می‌کند!
+الف) اگر آی‌پی صفحه مودم شما با سایتی که باز کردید یکسان باشد:
+   تبریک! شما آی‌پی عمومی (Public IP) دارید و پورت فورواردینگ ۱۰۰٪ کار خواهد کرد.
 ب) اگر آی‌پی مودم با اعدادی مثل:
-   • 100.64.0.0 تا 100.127.255.255 (رنج استاندارد CGNAT)
-   • 10.x.x.x یا 172.16.x.x
-   شروع شود، خط شما پشت CGNAT است. در این حالت پورت فوروارد کار نمی‌کند و باید با پشتیبانی شرکت اینترنت خود تماس بگیرید و درخواست «آی‌پی استاتیک» (یا خروج از CGNAT) بدهید.
+   • 100.64.0.0 تا 100.127.255.255 (رنج استاندارد جهانی CGNAT)
+   • 10.x.x.x یا 172.16.x.x تا 172.31.x.x
+   شروع شود، خط شما پشت CGNAT است. در این حالت پورت فوروارد به صورت مستقیم کار نمی‌کند و باید با پشتیبانی شرکت اینترنت خود تماس بگیرید و درخواست «آی‌پی استاتیک» (یا خروج از CGNAT) بدهید.
 
 --------------------------------------------------------------------------------
 ۲. نحوه تنظیم فوروارد پورت (Virtual Server) در انواع مودم‌ها:
 --------------------------------------------------------------------------------
-در تمام مودم‌ها هدف این است که پورت سرور (24680) را به سمت آی‌پی داخلی سیستم (Local IP) بفرستید.
+در تمام مودم‌ها هدف این است که پورت سرور (به صورت پیش‌فرض 8999 یا هر پورتی که خودتان در نرم‌افزار تنظیم کرده‌اید) را به سمت آی‌پی داخلی سیستم (Local IP) بفرستید.
 
 • مودم‌های یوتل (U.Tel):
   مسیر: Advanced > NAT > Virtual Server
-  دکمه: User-defined Service Name: Syncplay
-  پورت‌ها: WAN Port: 24680 | LAN Port: 24680 | Protocol: TCP
-  آی‌پی: Server IP Address را روی Local IP کامپیوتر بگذارید.
+  گزینه: User-defined Service Name: Syncplay
+  پورت‌ها: WAN Port: 8999 | LAN Port: 8999 | Protocol: TCP
+  آی‌پی: Server IP Address را روی Local IP کامپیوتر خود بگذارید.
 
 • مودم‌های تی‌پی‌لینک (TP-Link):
   مسیر: Forwarding > Virtual Servers (یا Advanced > NAT Forwarding)
-  پورت ورودی و خروجی: 24680
+  پورت ورودی و خروجی: 8999 (یا پورت تنظیمی شما)
   پروتکل: TCP | آی‌پی: Local IP کامپیوتر.
 
 • مودم‌های دی‌لینک (D-Link):
   مسیر: Advanced > Port Forwarding یا Virtual Server
-  نام: Syncplay | پورت: 24680 | آی‌پی: Local IP | پروتکل: TCP.
+  نام: Syncplay | پورت: 8999 | آی‌پی: Local IP | پروتکل: TCP.
 
-• مودم‌های هواوی، ایرانسل، مبین‌نت:
+• مودم‌های هواوی، ایرانسل، مبین‌نت، همراه اول:
   مسیر: Security > Virtual Server یا Port Forwarding
-  تنظیمات مشابه: پورت 24680 و آی‌پی داخلی کامپیوتر.
+  تنظیمات مشابه: پورت 8999 و آی‌پی داخلی سیستم شما.
+
+• مودم‌های تندا (Tenda) و زایکسل (Zyxel):
+  مسیر: Advanced > Virtual Server یا Port Forwarding
+  تنظیم پورت 8999 به سمت آدرس داخلی کامپیوتر.
 
 --------------------------------------------------------------------------------
-۳. نکته مهم لوپ‌بک (NAT Loopback):
+۳. نکته طلایی درباره لوپ‌بک (NAT Loopback):
 --------------------------------------------------------------------------------
-مودم‌های خانگی ترافیک ارسالی از داخل همان خانه به آی‌پی اینترنتی خودشان را برنمی‌گردانند.
-به همین دلیل:
-- خودتان روی کامپیوتر سرور باید در سینک‌پلی 127.0.0.1 را بزنید.
-- دوستتان در خانه خودش باید آی‌پی اینترنت شما را بزند.
+بسیاری از مودم‌های خانگی قابلیت NAT Loopback ندارند؛ یعنی اگر خودتان از پشت همان مودم به آی‌پی اینترنتی خودتان وصل شوید، مودم اتصال را بلاک می‌کند.
+به همین دلیل بسیار مهم است که:
+- خودتان روی همان کامپیوتری که سرور را روشن کرده‌اید، در نرم‌افزار سینک‌پلی آدرس 127.0.0.1 را بزنید.
+- دوستتان در خانه خودش باید آی‌پی اینترنت (Public IP) شما را همراه با پورت وارد کند.
 """
         txt.insert("1.0", guide_content)
         txt.config(state="disabled")
@@ -784,6 +940,8 @@ class SyncplayManagerApp:
 
     def check_firewall_status_real(self):
         port = self.entry_port.get().strip()
+        if not port:
+            return
         def _check():
             ok = check_windows_firewall_rule(port)
             def _update():
@@ -804,6 +962,9 @@ class SyncplayManagerApp:
 
     def fix_firewall_action(self):
         port = self.entry_port.get().strip()
+        if not port.isdigit():
+            messagebox.showerror("خطا", "شماره پورت نامعتبر است.")
+            return
         cmd = f'netsh advfirewall firewall add rule name="Syncplay Server {port}" dir=in action=allow protocol=TCP localport={port}'
         self.log(f"در حال ثبت پورت {port} در فایروال با دسترسی مدیر...")
         try:
@@ -846,7 +1007,7 @@ class SyncplayManagerApp:
         threading.Thread(target=_test, daemon=True).start()
 
     def open_syncplay_client(self):
-        if not self.syncplay_dir:
+        if not self.syncplay_dir or not os.path.isdir(self.syncplay_dir):
             self.choose_syncplay_path()
             if not self.syncplay_dir:
                 return
@@ -855,11 +1016,11 @@ class SyncplayManagerApp:
         if os.path.isfile(client_exe):
             try:
                 subprocess.Popen([client_exe])
-                self.log("برنامه اصلی سینک‌پلی باز شد.")
+                self.log("برنامه کلاینت سینک‌پلی باز شد.")
             except Exception as e:
                 messagebox.showerror("خطا", f"خطا در باز کردن برنامه: {e}")
         else:
-            messagebox.showerror("خطا", f"فایل Syncplay.exe در مسیر زیر پیدا نشد:\n{client_exe}")
+            messagebox.showerror("خطا", f"فایل Syncplay.exe در مسیر زیر پیدا نشد:\n{client_exe}\nلطفاً پوشه نصب را بررسی کنید.")
 
     def manual_detect_local_ip(self):
         new_ip = detect_local_ip()
@@ -940,24 +1101,27 @@ class SyncplayManagerApp:
             self.set_ui_offline()
             self.log("سرور با موفقیت خاموش شد.")
         else:
-            if not self.syncplay_dir:
+            if not self.syncplay_dir or not os.path.isdir(self.syncplay_dir):
                 self.choose_syncplay_path()
                 if not self.syncplay_dir:
                     return
 
             server_exe = os.path.join(self.syncplay_dir, "syncplayServer.exe")
             if not os.path.isfile(server_exe):
-                messagebox.showerror("خطا", f"فایل سرور پیدا نشد:\n{server_exe}")
+                messagebox.showerror("خطا", f"فایل سرور پیدا نشد:\n{server_exe}\nلطفاً مسیر نصب سینک‌پلی را انتخاب کنید.")
                 return
 
             port_str = self.entry_port.get().strip()
             password = self.entry_pass.get().strip()
             if not port_str.isdigit():
-                messagebox.showerror("خطا", "شماره پورت باید یک عدد باشد.")
+                messagebox.showerror("خطا", "شماره پورت باید یک عدد معتبر باشد.")
                 return
 
             self.running_port = int(port_str)
-            cmd = [server_exe, "--port", port_str, "--password", password]
+            cmd = [server_exe, "--port", port_str]
+            if password:
+                cmd.extend(["--password", password])
+
             self.log(f"در حال روشن کردن سرور روی پورت {port_str}...")
             self.server_start_time = time.time()
             self.initial_proc_io = None
@@ -988,12 +1152,12 @@ class SyncplayManagerApp:
     def save_settings_action(self):
         port = self.entry_port.get().strip()
         pwd = self.entry_pass.get().strip()
-        room = self.entry_room.get().strip()
+        room = self.entry_room.get().strip() or "cinema"
         pub_ip = self.entry_public_ip.get().strip()
         loc_ip = self.entry_local_ip.get().strip()
 
         if not port.isdigit():
-            messagebox.showerror("خطا", "شماره پورت نامعتبر است.")
+            messagebox.showerror("خطا", "شماره پورت باید یک عدد معتبر باشد.")
             return
 
         self.config["port"] = port
@@ -1003,15 +1167,12 @@ class SyncplayManagerApp:
         self.config["local_ip"] = loc_ip
         self.local_ip = loc_ip
         save_config(self.config)
-        self.log(f"تنظیمات ذخیره شد: پورت {port} | رمز {pwd} | اتاق {room}")
+        self.log(f"تنظیمات ذخیره شد: پورت {port} | رمز {'***' if pwd else '(بدون رمز)'} | اتاق {room}")
         self.check_firewall_status_real()
         messagebox.showinfo("ذخیره شد", "تنظیمات با موفقیت ذخیره شدند.\n(در صورت تغییر پورت، سرور را خاموش و دوباره روشن کنید).")
 
     def copy_self_info(self):
-        port = self.entry_port.get().strip()
-        addr = f"`127.0.0.1:{port}`"
-        
-        # Raw value for immediate paste
+        port = self.entry_port.get().strip() or "8999"
         raw_addr = f"127.0.0.1:{port}"
         self.root.clipboard_clear()
         self.root.clipboard_append(raw_addr)
@@ -1021,18 +1182,26 @@ class SyncplayManagerApp:
         )
 
     def copy_friend_info(self):
-        port = self.entry_port.get().strip()
+        port = self.entry_port.get().strip() or "8999"
         pwd = self.entry_pass.get().strip()
-        room = self.entry_room.get().strip() or "movie"
-        pub_ip = self.entry_public_ip.get().strip() or "5.232.118.106"
+        room = self.entry_room.get().strip() or "cinema"
+        pub_ip = self.entry_public_ip.get().strip()
+
+        if not pub_ip:
+            messagebox.showwarning(
+                "آی‌پی اینترنت خالی است",
+                "لطفاً ابتدا دکمه 'استعلام آی‌پی اینترنت' را بزنید یا آی‌پی عمومی مودم را در کادر مربوطه وارد کنید."
+            )
+            return
 
         # Telegram-optimized formatting with markdown code blocks (click-to-copy, zero https://)
+        pwd_line = f"`{pwd}`" if pwd else "`(بدون رمز)`"
         formatted_message = (
             "🎬 مشخصات اتصال به سرور سینک‌پلی:\n\n"
             "🔹 آدرس سرور (Server address):\n"
             f"`{pub_ip}:{port}`\n\n"
             "🔹 رمز عبور (Server password):\n"
-            f"`{pwd}`\n\n"
+            f"{pwd_line}\n\n"
             "🔹 نام اتاق (Default room):\n"
             f"`{room}`\n\n"
             "💡 راهنما: برنامه Syncplay را باز کنید و مقادیر بالا را وارد کنید (در تلگرام روی هر کادر تیره بالا ضربه بزنید خودکار کپی می‌شود)."
@@ -1138,7 +1307,7 @@ class SyncplayManagerApp:
                         else:
                             uptime_str = "مدت زمان فعالیت سرور: 00:00:00"
 
-                        # Friendly, respectful client breakdown (Never generic 'Guest')
+                        # Client breakdown display
                         if external_count > 0 and local_count > 0:
                             if external_count == 1:
                                 client_title = "۲ نفر آنلاین 🟢"

@@ -1,10 +1,11 @@
 {
-  "port": "24680",
-  "password": "your_server_password",
-  "room": "movie",
+  "port": "8999",
+  "password": "",
+  "room": "cinema",
   "public_ip": "",
   "local_ip": "",
   "syncplay_dir": "",
+  "router_gateway_ip": "192.168.1.1",
   "enable_logs": true,
   "enable_sound_alerts": true
 }

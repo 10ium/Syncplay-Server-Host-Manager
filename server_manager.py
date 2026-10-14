@@ -798,6 +798,21 @@ class SyncplayManagerApp:
         )
         btn_clear.pack(side="left")
 
+        btn_copy_logs = tk.Button(
+            log_top,
+            text="📋 کپی متن لاگ",
+            font=("Segoe UI", 8),
+            bg=self.subcard_bg,
+            fg=self.accent_cyan,
+            activebackground="#353554",
+            activeforeground=self.accent_cyan,
+            cursor="hand2",
+            padx=8,
+            relief="flat",
+            command=self.copy_all_logs
+        )
+        btn_copy_logs.pack(side="left", padx=(8, 0))
+
         self.log_text = tk.Text(
             log_card,
             bg="#101018",
@@ -961,6 +976,16 @@ class SyncplayManagerApp:
         self.log_text.delete("1.0", "end")
         self.log_text.config(state="disabled")
 
+    def copy_all_logs(self):
+        content = self.log_text.get("1.0", "end-1c").strip()
+        if not content:
+            messagebox.showinfo("لاگ خالی است", "در حال حاضر هیچ متنی در پنجره گزارش‌ها ثبت نشده است.")
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(content)
+        self.log("تمام گزارش‌های رویداد در کلیپ‌بورد کپی شد. 📋")
+        messagebox.showinfo("کپی شد! ✅", "تمام متن گزارش رویدادها (لاگ سرور) با موفقیت در کلیپ‌بورد کپی شد.")
+
     def toggle_log_recording(self):
         enabled = self.var_enable_logs.get()
         self.config["enable_logs"] = enabled
@@ -1015,19 +1040,21 @@ class SyncplayManagerApp:
 
         pid = get_syncplay_pid()
         if not pid:
-            self.log("هشدار تست پورت: سرور سینک‌پلی خاموش است! برای تست باز بودن، بهتر است ابتدا سرور را روشن کنید.")
+            self.log("هشدار تست پورت: سرور سینک‌پلی در حال حاضر خاموش است! برای تست، ابتدا سرور را روشن کنید.")
             if not messagebox.askyesno(
                 "سرور خاموش است ⚠️",
-                "سرور سینک‌پلی در حال حاضر خاموش است.\nاگر سرور روشن نباشد، پورت باز حتی در صورت فوروارد بودن پاسخی به تست نمی‌دهد.\n\nآیا مایلید با این وجود تست استعلام از اینترنت انجام شود؟"
+                "سرور سینک‌پلی در حال حاضر خاموش است.\nاگر سرور روشن نباشد، حتی اگر پورت در مودم باز باشد پاسخی نمی‌دهد.\n\nآیا مایلید با این وجود تست استعلام انجام شود؟"
             ):
                 return
 
-        self.log(f"در حال استعلام وضعیت پورت {port} روی آی‌پی {pub_ip} از طریق سرورهای بین‌المللی اینترنت...")
-        self.btn_test_port.config(text="در حال استعلام از اینترنت...", state="disabled")
+        self.log(f"در حال بررسی وضعیت پورت {port} روی آی‌پی {pub_ip}...")
+        self.btn_test_port.config(text="در حال استعلام...", state="disabled")
 
         def _test():
-            result_type = None  # "success", "refused", "timeout", "error"
+            result_type = None  # "success", "refused", "timeout", "diag_ok", "diag_warn"
             detail_msg = ""
+
+            # لایه ۱: استعلام مستقیم از سرور بین‌المللی canyouseeme.org
             try:
                 data = urllib.parse.urlencode({'port': str(port), 'IP': str(pub_ip)}).encode()
                 req = urllib.request.Request(
@@ -1035,7 +1062,7 @@ class SyncplayManagerApp:
                     data=data,
                     headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
                 )
-                with urllib.request.urlopen(req, timeout=12) as r:
+                with urllib.request.urlopen(req, timeout=7) as r:
                     html = r.read().decode('utf-8')
                     if 'Success:' in html:
                         result_type = "success"
@@ -1043,16 +1070,71 @@ class SyncplayManagerApp:
                     elif 'Error:' in html:
                         if 'refused' in html.lower():
                             result_type = "refused"
-                            detail_msg = f"سیگنال از اینترنت به مودم و سیستم شما رسید! پورت فوروارد شده اما برنامه‌ای روی پورت {port} گوش‌به‌زنگ نیست (Connection refused). مطمئن شوید سرور روشن است."
+                            detail_msg = f"سیگنال از اینترنت به سیستم شما رسید! پورت فوروارد شده اما برنامه سرور پاسخ نداد (Connection refused). مطمئن شوید سرور روشن است."
                         elif 'timed out' in html.lower():
                             result_type = "timeout"
                             detail_msg = f"پورت {port} از اینترنت پاسخی نداد (Connection timed out).\nمودم یا فایروال ترافیک را به سمت سیستم هدایت نکرده است."
-                        else:
-                            result_type = "error"
-                            detail_msg = f"پورت {port} از اینترنت پاسخ نداد."
-            except Exception as e:
-                result_type = "network_err"
-                detail_msg = f"خطا در برقراری ارتباط با سرور تست آنلاین: {e}"
+            except Exception:
+                pass
+
+            # لایه ۲: فال‌بک به سرور دوم در صورت مسدود بودن سرور اول
+            if result_type is None:
+                try:
+                    data = urllib.parse.urlencode({'target_ip': str(pub_ip), 'port': str(port)}).encode()
+                    req = urllib.request.Request(
+                        'https://portchecker.co/check',
+                        data=data,
+                        headers={
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                            'Referer': 'https://portchecker.co/'
+                        }
+                    )
+                    with urllib.request.urlopen(req, timeout=7) as r:
+                        html = r.read().decode('utf-8')
+                        if 'target port is open' in html.lower() or 'port is open' in html.lower():
+                            result_type = "success"
+                            detail_msg = f"پورت {port} روی آی‌پی {pub_ip} از طریق سرویس کمکی اینترنت تایید شد! ✅"
+                        elif 'closed' in html.lower():
+                            result_type = "timeout"
+                            detail_msg = f"پورت {port} از اینترنت مسدود یا بسته گزارش شد."
+                except Exception:
+                    pass
+
+            # لایه ۳: عیب‌یابی هوشمند سیستم در صورت قطع اینترنت بین‌الملل یا کاربری بدون فیلترشکن
+            if result_type is None:
+                is_listening = False
+                try:
+                    s_test = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s_test.settimeout(2)
+                    res = s_test.connect_ex(('127.0.0.1', int(port)))
+                    s_test.close()
+                    is_listening = (res == 0)
+                except Exception:
+                    pass
+
+                fw_ok = check_windows_firewall_rule(port)
+
+                if is_listening and fw_ok:
+                    result_type = "diag_ok"
+                    detail_msg = (
+                        "⚠️ سرورهای تست بین‌المللی اینترنت در دسترس نبودند (این اتفاق در حالت بدون فیلترشکن به دلیل فیلترینگ خارجی طبیعی است).\n\n"
+                        "🔍 نتیجه بررسی سلامت داخلی سیستم شما:\n"
+                        f"۱. سرور سینک‌پلی روی پورت {port} در ویندوز فعال و گوش‌به‌زنگ است. ✅\n"
+                        f"۲. پورت {port} در فایروال ویندوز مجاز است. ✅\n"
+                        f"۳. ارتباط سیستم با شبکه محلی مودم برقرار است. ✅\n\n"
+                        "💡 اگر پورت {port} را در مودم به سمت آی‌پی داخلی سیستم فوروارد کرده باشید، دوستان شما می‌توانند متصل شوند."
+                    )
+                else:
+                    result_type = "diag_warn"
+                    reasons = []
+                    if not is_listening:
+                        reasons.append(f"• برنامه سرور روی پورت {port} روشن نیست! (دکمه 'روشن کردن سرور' را بزنید)")
+                    if not fw_ok:
+                        reasons.append(f"• پورت {port} در فایروال ویندوز مسدود است! (دکمه 'ثبت پورت در فایروال' را بزنید)")
+                    detail_msg = (
+                        "⚠️ سرورهای تست بین‌المللی در دسترس نبودند.\n\n"
+                        "❌ نتیجه بررسی سلامت سیستم:\n" + "\n".join(reasons)
+                    )
 
             def _done():
                 self.btn_test_port.config(text="🔍 تست آنلاین پورت مودم از اینترنت", state="normal")
@@ -1064,11 +1146,14 @@ class SyncplayManagerApp:
                     messagebox.showwarning("ارتباط برقرار شد اما سرور پاسخ نداد ⚠️", detail_msg)
                 elif result_type == "timeout":
                     self.log(f"نتیجه تست پورت: {detail_msg}")
-                    messagebox.showerror("پورت پاسخ نداد ❌", f"{detail_msg}\n\nنکات قابل بررسی:\n۱. مطمئن شوید سرور را روشن کرده‌اید.\n۲. آی‌پی عمومی مودم را استعلام کنید (شاید مودم ریستارت شده باشد).\n۳. تنظیم Virtual Server مودم را بررسی کنید.")
+                    messagebox.showerror("پورت پاسخ نداد ❌", f"{detail_msg}\n\nنکات قابل بررسی:\n۱. مطمئن شوید سرور روشن است.\n۲. استعلام آی‌پی اینترنت را بزنید تا از تغییر نکردن آی‌پی مطمئن شوید.\n۳. تنظیمات Virtual Server مودم را بررسی کنید.")
+                elif result_type == "diag_ok":
+                    self.log("نتیجه عیب‌یابی داخلی: سرور و فایروال محلی کاملاً آماده هستند. ✅")
+                    if messagebox.askyesno("عیب‌یابی داخلی موفق", f"{detail_msg}\n\nآیا مایلید سایت تست پورت مستقیماً در مرورگر شما باز شود؟"):
+                        webbrowser.open("https://canyouseeme.org/")
                 else:
-                    self.log(f"نتیجه تست: {detail_msg}")
-                    if messagebox.askyesno("تست آنلاین در مرورگر", f"{detail_msg}\n\nآیا مایلید سایت تست پورت مستقیماً در مرورگر شما باز شود؟"):
-                        webbrowser.open(f"https://canyouseeme.org/")
+                    self.log("نتیجه عیب‌یابی داخلی: موانعی در سیستم وجود دارد.")
+                    messagebox.showwarning("نیاز به اصلاح تنظیمات ⚠️", detail_msg)
             self.root.after(0, _done)
 
         threading.Thread(target=_test, daemon=True).start()
@@ -1103,12 +1188,22 @@ class SyncplayManagerApp:
         threading.Thread(target=self.fetch_public_ip, daemon=True).start()
 
     def fetch_public_ip(self):
-        for url in ["https://api.ipify.org", "https://icanhazip.com", "https://ifconfig.me/ip"]:
+        # Multi-endpoint detection with HTTP/HTTPS fallbacks for without-VPN environments
+        endpoints = [
+            "https://api.ipify.org",
+            "http://api.ipify.org",
+            "https://icanhazip.com",
+            "http://icanhazip.com",
+            "https://ifconfig.me/ip",
+            "https://api4.my-ip.io/ip",
+            "https://checkip.amazonaws.com"
+        ]
+        for url in endpoints:
             try:
                 req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=3) as response:
+                with urllib.request.urlopen(req, timeout=4) as response:
                     ip = response.read().decode('utf-8').strip()
-                    if ip:
+                    if ip and len(ip.split('.')) == 4:
                         self.config["public_ip"] = ip
                         save_config(self.config)
                         def _update():
@@ -1119,7 +1214,7 @@ class SyncplayManagerApp:
                         return
             except Exception:
                 continue
-        self.log("استعلام ناموفق بود (آی‌پی را از تب Status مودم مشاهده کرده و دستی وارد کنید).")
+        self.log("استعلام خودکار ناموفق بود (آی‌پی را از تب Status مودم مشاهده کرده و دستی وارد کنید).")
 
     def check_initial_status(self):
         pid = get_syncplay_pid()

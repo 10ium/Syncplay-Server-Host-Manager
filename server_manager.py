@@ -14,7 +14,7 @@ from tkinter import ttk, messagebox, filedialog
 
 # Application Metadata
 APP_NAME = "Syncplay Server Host Manager"
-APP_VERSION = "v1.0.0"
+APP_VERSION = "v1.0.2"
 APP_TITLE = f"🎬 {APP_NAME} {APP_VERSION} | کنترل پنل سرور سینک‌پلی"
 if getattr(sys, 'frozen', False):
     EXE_DIR = os.path.dirname(sys.executable)

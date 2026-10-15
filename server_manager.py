@@ -1,11 +1,13 @@
 import os
 import sys
+import re
 import json
 import time
 import socket
 import webbrowser
 import urllib.request
 import threading
+import concurrent.futures
 import subprocess
 import winsound
 import psutil
@@ -14,7 +16,7 @@ from tkinter import ttk, messagebox, filedialog
 
 # Application Metadata
 APP_NAME = "Syncplay Server Host Manager"
-APP_VERSION = "v1.0.3"
+APP_VERSION = "v1.0.4"
 APP_TITLE = f"🎬 {APP_NAME} {APP_VERSION} | کنترل پنل سرور سینک‌پلی"
 if getattr(sys, 'frozen', False):
     EXE_DIR = os.path.dirname(sys.executable)
@@ -1202,52 +1204,66 @@ class SyncplayManagerApp:
         threading.Thread(target=self.fetch_public_ip, daemon=True).start()
 
     def fetch_public_ip(self):
-        # Ultra-resilient endpoints verified for Iran network (both with & without VPN)
-        endpoints = [
-            ("trace", "https://1.1.1.1/cdn-cgi/trace"),
-            ("trace", "https://cloudflare.com/cdn-cgi/trace"),
-            ("plain", "http://ident.me"),
-            ("plain", "https://api.ip.sb/ip"),
-            ("trace", "http://1.1.1.1/cdn-cgi/trace"),
-            ("dyndns", "http://checkip.dyndns.org"),
-            ("plain", "https://api.ipify.org")
+        # Parallel multi-endpoint IP detection including user-verified get.geojs.io and unblocked endpoints
+        candidate_urls = [
+            "https://get.geojs.io/v1/ip",
+            "http://get.geojs.io/v1/ip",
+            "http://icanhazip.com",
+            "http://api.ip.sb/ip",
+            "https://api.ip.sb/ip",
+            "http://ident.me",
+            "http://api.myip.la",
+            "https://api.myip.la",
+            "http://www.l2.io/ip",
+            "https://1.1.1.1/cdn-cgi/trace",
+            "http://1.1.1.1/cdn-cgi/trace"
         ]
         import ssl
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
 
-        for mode, url in endpoints:
+        def _probe_single(url):
             try:
-                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=3, context=ctx) as response:
-                    raw = response.read().decode('utf-8', errors='ignore').strip()
-                    ip = ""
-                    if mode == "trace":
-                        for line in raw.splitlines():
-                            if line.startswith("ip="):
-                                ip = line.split("=")[1].strip()
-                                break
-                    elif mode == "dyndns":
-                        import re
-                        m = re.search(r'Current IP Address:\s*([\d\.]+)', raw)
-                        if m:
-                            ip = m.group(1).strip()
-                    else:
-                        ip = raw.strip()
-
-                    if ip and len(ip.split('.')) == 4 and all(part.isdigit() and 0 <= int(part) <= 255 for part in ip.split('.')):
-                        self.config["public_ip"] = ip
-                        save_config(self.config)
-                        def _update(found_ip=ip):
-                            self.entry_public_ip.delete(0, "end")
-                            self.entry_public_ip.insert(0, found_ip)
-                        self.root.after(0, _update)
-                        self.log(f"آی‌پی عمومی اینترنت با موفقیت دریافت شد: {ip}")
-                        return
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+                with urllib.request.urlopen(req, timeout=5, context=ctx) as r:
+                    raw = r.read().decode('utf-8', errors='ignore').strip()
+                    m = re.search(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', raw)
+                    if m:
+                        candidate_ip = m.group(0)
+                        if not candidate_ip.startswith("198.18.") and not candidate_ip.startswith("127.") and not candidate_ip.startswith("169.254.") and not candidate_ip.startswith("192.168."):
+                            parts = candidate_ip.split('.')
+                            if all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
+                                return candidate_ip, url
             except Exception:
-                continue
-        self.log("استعلام خودکار ناموفق بود (آی‌پی را از تب Status مودم مشاهده کرده و دستی وارد کنید).")
+                pass
+            return None
+
+        found_ip = None
+        source_url = ""
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(candidate_urls)) as executor:
+                futures = [executor.submit(_probe_single, u) for u in candidate_urls]
+                for future in concurrent.futures.as_completed(futures):
+                    res = future.result()
+                    if res:
+                        found_ip, source_url = res
+                        break
+        except Exception:
+            pass
+
+        if found_ip:
+            self.config["public_ip"] = found_ip
+            save_config(self.config)
+            def _update(ip=found_ip):
+                self.entry_public_ip.delete(0, "end")
+                self.entry_public_ip.insert(0, ip)
+            self.root.after(0, _update)
+            # Short clean name of source
+            src_clean = source_url.split('/')[2] if '//' in source_url else source_url
+            self.log(f"آی‌پی عمومی اینترنت با موفقیت دریافت شد: {found_ip} (از سرور: {src_clean})")
+        else:
+            self.log("استعلام خودکار ناموفق بود (آی‌پی را از تب Status مودم در 192.168.1.1 وارد کنید).")
 
     def check_initial_status(self):
         pid = get_syncplay_pid()

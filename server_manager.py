@@ -14,7 +14,7 @@ from tkinter import ttk, messagebox, filedialog
 
 # Application Metadata
 APP_NAME = "Syncplay Server Host Manager"
-APP_VERSION = "v1.0.2"
+APP_VERSION = "v1.0.3"
 APP_TITLE = f"🎬 {APP_NAME} {APP_VERSION} | کنترل پنل سرور سینک‌پلی"
 if getattr(sys, 'frozen', False):
     EXE_DIR = os.path.dirname(sys.executable)
@@ -53,16 +53,16 @@ DEFAULT_CONFIG = {
 }
 
 def detect_gateway_ip():
-    """Detect local router default gateway IP address"""
-    try:
-        # Use net route or ipconfig
-        cmd = 'powershell -NoProfile -Command "(Get-NetRoute -DestinationPrefix \'0.0.0.0/0\' | Where-Object { $_.NextHop -ne \'0.0.0.0\' } | Select-Object -First 1 -ExpandProperty NextHop)"'
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, errors='replace')
-        gw = res.stdout.strip()
-        if gw and len(gw.split('.')) == 4:
+    """Detect local router default gateway IP address quickly without PowerShell delay"""
+    for gw in ["192.168.1.1", "192.168.0.1", "10.0.0.1"]:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(0.1)
+            s.connect((gw, 80))
+            s.close()
             return gw
-    except Exception:
-        pass
+        except Exception:
+            pass
     return "192.168.1.1"
 
 def find_syncplay_installation(custom_dir=""):
@@ -112,22 +112,23 @@ def save_config(cfg):
         print(f"Error saving config: {e}")
 
 def detect_local_ip():
-    """Detect local IPv4 address connected to the LAN router (bypassing VPN/TUN)"""
-    gw = detect_gateway_ip() or "192.168.1.1"
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect((gw, 80))
-        ip = s.getsockname()[0]
-        s.close()
-        if ip and not ip.startswith("198.18.") and not ip.startswith("127.") and not ip.startswith("169.254."):
-            return ip
-    except Exception:
-        pass
+    """Detect local IPv4 address connected to the LAN router (bypassing VPN/TUN) in < 50ms"""
+    for gw in ["192.168.1.1", "192.168.0.1", "10.0.0.1"]:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(0.1)
+            s.connect((gw, 80))
+            ip = s.getsockname()[0]
+            s.close()
+            if ip and not ip.startswith("198.18.") and not ip.startswith("127.") and not ip.startswith("169.254."):
+                return ip
+        except Exception:
+            pass
 
     # Fallback: scan physical network adapters ignoring VPN/TUN/virtual
     try:
         for iface, addrs in psutil.net_if_addrs().items():
-            if any(bad in iface.lower() for bad in ["bettbox", "clash", "sing-box", "tun", "tap", "loopback", "virtual"]):
+            if any(bad in iface.lower() for bad in ["bettbox", "clash", "sing-box", "tun", "tap", "loopback", "virtual", "wintun"]):
                 continue
             for addr in addrs:
                 if addr.family == socket.AF_INET:
@@ -1055,15 +1056,23 @@ class SyncplayManagerApp:
             detail_msg = ""
 
             # لایه ۱: استعلام مستقیم از سرور بین‌المللی canyouseeme.org
+            import ssl
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+
             try:
                 data = urllib.parse.urlencode({'port': str(port), 'IP': str(pub_ip)}).encode()
                 req = urllib.request.Request(
                     'https://canyouseeme.org/',
                     data=data,
-                    headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+                    headers={
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    }
                 )
-                with urllib.request.urlopen(req, timeout=7) as r:
-                    html = r.read().decode('utf-8')
+                with urllib.request.urlopen(req, timeout=14, context=ctx) as r:
+                    html = r.read().decode('utf-8', errors='ignore')
                     if 'Success:' in html:
                         result_type = "success"
                         detail_msg = f"پورت {port} روی آی‌پی {pub_ip} از طریق اینترنت کاملاً باز و پاسخگو است! ✅"
@@ -1089,8 +1098,8 @@ class SyncplayManagerApp:
                             'Referer': 'https://portchecker.co/'
                         }
                     )
-                    with urllib.request.urlopen(req, timeout=7) as r:
-                        html = r.read().decode('utf-8')
+                    with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
+                        html = r.read().decode('utf-8', errors='ignore')
                         if 'target port is open' in html.lower() or 'port is open' in html.lower():
                             result_type = "success"
                             detail_msg = f"پورت {port} روی آی‌پی {pub_ip} از طریق سرویس کمکی اینترنت تایید شد! ✅"
@@ -1175,42 +1184,66 @@ class SyncplayManagerApp:
             messagebox.showerror("خطا", f"فایل Syncplay.exe در مسیر زیر پیدا نشد:\n{client_exe}\nلطفاً پوشه نصب را بررسی کنید.")
 
     def manual_detect_local_ip(self):
-        new_ip = detect_local_ip()
-        self.local_ip = new_ip
-        self.entry_local_ip.delete(0, "end")
-        self.entry_local_ip.insert(0, new_ip)
-        self.config["local_ip"] = new_ip
-        save_config(self.config)
-        self.log(f"آی‌پی داخلی سیستم استعلام شد: {new_ip}")
+        self.log("در حال استعلام سریع آی‌پی داخلی سیستم...")
+        def _worker():
+            new_ip = detect_local_ip()
+            def _update():
+                self.local_ip = new_ip
+                self.entry_local_ip.delete(0, "end")
+                self.entry_local_ip.insert(0, new_ip)
+                self.config["local_ip"] = new_ip
+                save_config(self.config)
+                self.log(f"آی‌پی داخلی سیستم استعلام شد: {new_ip}")
+            self.root.after(0, _update)
+        threading.Thread(target=_worker, daemon=True).start()
 
     def manual_fetch_public_ip(self):
         self.log("در حال استعلام آی‌پی عمومی اینترنت...")
         threading.Thread(target=self.fetch_public_ip, daemon=True).start()
 
     def fetch_public_ip(self):
-        # Multi-endpoint detection with HTTP/HTTPS fallbacks for without-VPN environments
+        # Ultra-resilient endpoints verified for Iran network (both with & without VPN)
         endpoints = [
-            "https://api.ipify.org",
-            "http://api.ipify.org",
-            "https://icanhazip.com",
-            "http://icanhazip.com",
-            "https://ifconfig.me/ip",
-            "https://api4.my-ip.io/ip",
-            "https://checkip.amazonaws.com"
+            ("trace", "https://1.1.1.1/cdn-cgi/trace"),
+            ("trace", "https://cloudflare.com/cdn-cgi/trace"),
+            ("plain", "http://ident.me"),
+            ("plain", "https://api.ip.sb/ip"),
+            ("trace", "http://1.1.1.1/cdn-cgi/trace"),
+            ("dyndns", "http://checkip.dyndns.org"),
+            ("plain", "https://api.ipify.org")
         ]
-        for url in endpoints:
+        import ssl
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        for mode, url in endpoints:
             try:
                 req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=4) as response:
-                    ip = response.read().decode('utf-8').strip()
-                    if ip and len(ip.split('.')) == 4:
+                with urllib.request.urlopen(req, timeout=3, context=ctx) as response:
+                    raw = response.read().decode('utf-8', errors='ignore').strip()
+                    ip = ""
+                    if mode == "trace":
+                        for line in raw.splitlines():
+                            if line.startswith("ip="):
+                                ip = line.split("=")[1].strip()
+                                break
+                    elif mode == "dyndns":
+                        import re
+                        m = re.search(r'Current IP Address:\s*([\d\.]+)', raw)
+                        if m:
+                            ip = m.group(1).strip()
+                    else:
+                        ip = raw.strip()
+
+                    if ip and len(ip.split('.')) == 4 and all(part.isdigit() and 0 <= int(part) <= 255 for part in ip.split('.')):
                         self.config["public_ip"] = ip
                         save_config(self.config)
-                        def _update():
+                        def _update(found_ip=ip):
                             self.entry_public_ip.delete(0, "end")
-                            self.entry_public_ip.insert(0, ip)
+                            self.entry_public_ip.insert(0, found_ip)
                         self.root.after(0, _update)
-                        self.log(f"آی‌پی عمومی دریافت شد: {ip}")
+                        self.log(f"آی‌پی عمومی اینترنت با موفقیت دریافت شد: {ip}")
                         return
             except Exception:
                 continue
@@ -1472,20 +1505,20 @@ class SyncplayManagerApp:
                         # Client breakdown display
                         if external_count > 0 and local_count > 0:
                             if external_count == 1:
-                                client_title = "۲ نفر آنلاین 🟢"
-                                detail_str = "شما + ۱ دوست از اینترنت"
+                                client_title = "۲ نفر متصل 🟢"
+                                detail_str = f"شما (میزبان) + دوست متصل ({external_ips[0]})"
                             else:
-                                client_title = f"{client_count} نفر آنلاین 🟢"
-                                detail_str = f"شما + {external_count} دوست از اینترنت"
+                                client_title = f"{client_count} نفر متصل 🟢"
+                                detail_str = f"شما (میزبان) + {external_count} کاربر متصل از اینترنت"
                         elif external_count > 0:
-                            client_title = f"{external_count} دوست متصل 🟢"
-                            detail_str = f"آی‌پی: {external_ips[0]}" if len(external_ips) == 1 else "دوستان از اینترنت"
+                            client_title = f"{external_count} کاربر متصل 🟢"
+                            detail_str = f"آی‌پی: {external_ips[0]}" if len(external_ips) == 1 else f"{external_count} کاربر از اینترنت"
                         elif local_count > 0:
                             client_title = "۱ نفر آنلاین 🟢"
-                            detail_str = "فقط خودتان (روی سرور)"
+                            detail_str = "فقط خودتان (میزبان سرور)"
                         else:
                             client_title = "۰ نفر"
-                            detail_str = "منتظر اتصال"
+                            detail_str = "منتظر اتصال کاربران"
 
                         def _update_ui(c_title, det_str, sp_str, tot_str, r_str, u_str, is_online):
                             self.lbl_clients.config(text=c_title, fg=self.accent_green if is_online else self.text_color)

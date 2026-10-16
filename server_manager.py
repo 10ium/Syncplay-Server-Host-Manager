@@ -16,8 +16,18 @@ from tkinter import ttk, messagebox, filedialog
 
 # Application Metadata
 APP_NAME = "Syncplay Server Host Manager"
-APP_VERSION = "v1.0.4"
+APP_VERSION = "v1.0.5"
 APP_TITLE = f"🎬 {APP_NAME} {APP_VERSION} | کنترل پنل سرور سینک‌پلی"
+
+# Strip ghost proxy environment variables so connections don't hang on dead 127.0.0.1:7890
+for _v in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']:
+    os.environ.pop(_v, None)
+
+# Force direct connection opener bypassing Windows system proxy and dead WinINet registry
+try:
+    urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
+except Exception:
+    pass
 if getattr(sys, 'frozen', False):
     EXE_DIR = os.path.dirname(sys.executable)
     BUNDLE_DIR = getattr(sys, '_MEIPASS', EXE_DIR)
@@ -1062,6 +1072,7 @@ class SyncplayManagerApp:
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
+            direct_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
             try:
                 data = urllib.parse.urlencode({'port': str(port), 'IP': str(pub_ip)}).encode()
@@ -1073,7 +1084,7 @@ class SyncplayManagerApp:
                         'Content-Type': 'application/x-www-form-urlencoded'
                     }
                 )
-                with urllib.request.urlopen(req, timeout=14, context=ctx) as r:
+                with direct_opener.open(req, timeout=14) as r:
                     html = r.read().decode('utf-8', errors='ignore')
                     if 'Success:' in html:
                         result_type = "success"
@@ -1100,7 +1111,7 @@ class SyncplayManagerApp:
                             'Referer': 'https://portchecker.co/'
                         }
                     )
-                    with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
+                    with direct_opener.open(req, timeout=10) as r:
                         html = r.read().decode('utf-8', errors='ignore')
                         if 'target port is open' in html.lower() or 'port is open' in html.lower():
                             result_type = "success"
@@ -1222,11 +1233,12 @@ class SyncplayManagerApp:
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
+        direct_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
         def _probe_single(url):
             try:
                 req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
-                with urllib.request.urlopen(req, timeout=5, context=ctx) as r:
+                with direct_opener.open(req, timeout=8) as r:
                     raw = r.read().decode('utf-8', errors='ignore').strip()
                     m = re.search(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', raw)
                     if m:

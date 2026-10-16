@@ -16,7 +16,7 @@ from tkinter import ttk, messagebox, filedialog
 
 # Application Metadata
 APP_NAME = "Syncplay Server Host Manager"
-APP_VERSION = "v1.0.6"
+APP_VERSION = "v1.0.7"
 APP_TITLE = f"🎬 {APP_NAME} {APP_VERSION} | کنترل پنل سرور سینک‌پلی"
 
 # Strip ghost proxy environment variables so connections don't hang on dead 127.0.0.1:7890
@@ -43,6 +43,7 @@ if not os.path.isfile(CONFIG_FILE):
         CONFIG_FILE = parent_cfg
     elif os.path.isfile("config.json"):
         CONFIG_FILE = os.path.abspath("config.json")
+
 ICON_ICO = os.path.join(BUNDLE_DIR, "assets", "icon.ico")
 if not os.path.isfile(ICON_ICO):
     ICON_ICO = os.path.join(EXE_DIR, "assets", "icon.ico")
@@ -61,7 +62,10 @@ DEFAULT_CONFIG = {
     "syncplay_dir": "",
     "router_gateway_ip": "192.168.1.1",
     "enable_logs": True,
-    "enable_sound_alerts": True
+    "enable_sound_alerts": True,
+    "enable_ddns": False,
+    "ddns_domain": "syncplay.duckdns.org",
+    "ddns_token": ""
 }
 
 def detect_gateway_ip():
@@ -602,6 +606,55 @@ class SyncplayManagerApp:
             command=self.manual_detect_local_ip
         )
         btn_detect_loc.pack(side="left")
+
+        # DDNS Row (Dynamic DNS / DuckDNS Support)
+        ddns_bar = tk.Frame(info_card, bg=self.card_bg)
+        ddns_bar.pack(fill="x", pady=2)
+
+        self.var_enable_ddns = tk.BooleanVar(value=self.config.get("enable_ddns", False))
+        chk_ddns = tk.Checkbutton(
+            ddns_bar,
+            text="🌐 دامنه ثابت (DDNS):",
+            variable=self.var_enable_ddns,
+            bg=self.card_bg,
+            fg=self.accent_purple,
+            selectcolor=self.input_bg,
+            activebackground=self.card_bg,
+            activeforeground=self.accent_purple,
+            font=("Segoe UI", 9, "bold"),
+            command=self.toggle_ddns_pref
+        )
+        chk_ddns.pack(side="right", padx=(4, 0))
+
+        self.entry_ddns_domain = tk.Entry(ddns_bar, font=("Segoe UI", 9), bg=self.input_bg, fg=self.accent_cyan, insertbackground="white", width=20, relief="flat", justify="center")
+        self.entry_ddns_domain.insert(0, self.config.get("ddns_domain") or "syncplay.duckdns.org")
+        self.entry_ddns_domain.pack(side="right", padx=(4, 4))
+
+        tk.Label(ddns_bar, text="توکن:", font=("Segoe UI", 8), bg=self.card_bg, fg=self.subtext_color).pack(side="right", padx=(2, 0))
+        self.entry_ddns_token = tk.Entry(ddns_bar, font=("Segoe UI", 9), bg=self.input_bg, fg=self.text_color, insertbackground="white", width=12, relief="flat", justify="center", show="*")
+        self.entry_ddns_token.insert(0, self.config.get("ddns_token", ""))
+        self.entry_ddns_token.pack(side="right", padx=(2, 6))
+
+        btn_sync_ddns = tk.Button(
+            ddns_bar,
+            text="🔄 همگام‌سازی دامنه",
+            font=("Segoe UI", 8),
+            bg=self.subcard_bg,
+            fg=self.accent_purple,
+            cursor="hand2",
+            relief="flat",
+            command=lambda: self.sync_ddns_action(manual=True)
+        )
+        btn_sync_ddns.pack(side="left")
+
+        self.lbl_ddns_status = tk.Label(
+            ddns_bar,
+            text="آماده" if not self.config.get("enable_ddns") else "فعال ✅",
+            font=("Segoe UI", 8),
+            bg=self.card_bg,
+            fg=self.accent_green if self.config.get("enable_ddns") else self.subtext_color
+        )
+        self.lbl_ddns_status.pack(side="left", padx=(4, 0))
 
         # 6. Settings Card (Port, Password, Room, Sound Alerts)
         cfg_card = tk.Frame(container, bg=self.card_bg, padx=18, pady=8, highlightthickness=1, highlightbackground="#2d2d48")
@@ -1285,8 +1338,107 @@ class SyncplayManagerApp:
             # Short clean name of source
             src_clean = source_url.split('/')[2] if '//' in source_url else source_url
             self.log(f"آی‌پی عمومی اینترنت با موفقیت دریافت شد: {found_ip} (از سرور: {src_clean})")
+            if getattr(self, "var_enable_ddns", None) and self.var_enable_ddns.get():
+                self.sync_ddns_action(manual=False)
         else:
             self.log("استعلام خودکار ناموفق بود (آی‌پی را از تب Status مودم در 192.168.1.1 وارد کنید).")
+
+    def toggle_ddns_pref(self):
+        enabled = self.var_enable_ddns.get()
+        self.config["enable_ddns"] = enabled
+        save_config(self.config)
+        if enabled:
+            if hasattr(self, "lbl_ddns_status"):
+                self.lbl_ddns_status.config(text="فعال ✅", fg=self.accent_green)
+            self.log("قابلیت دامنه داینامیک (DDNS) فعال شد.")
+            self.sync_ddns_action(manual=False)
+        else:
+            if hasattr(self, "lbl_ddns_status"):
+                self.lbl_ddns_status.config(text="غیرفعال", fg=self.subtext_color)
+            self.log("قابلیت دامنه داینامیک (DDNS) غیرفعال شد.")
+
+    def sync_ddns_action(self, manual=False):
+        domain = self.entry_ddns_domain.get().strip() if hasattr(self, "entry_ddns_domain") else self.config.get("ddns_domain", "")
+        token = self.entry_ddns_token.get().strip() if hasattr(self, "entry_ddns_token") else self.config.get("ddns_token", "")
+        pub_ip = self.entry_public_ip.get().strip() if hasattr(self, "entry_public_ip") else self.config.get("public_ip", "")
+
+        if not domain:
+            if manual:
+                messagebox.showerror("خطا", "لطفاً نام دامنه را وارد کنید.")
+            return
+
+        if not pub_ip:
+            if manual:
+                messagebox.showwarning("هشدار", "ابتدا دکمه استعلام آی‌پی اینترنت را بزنید تا آی‌پی فعلی دریافت شود.")
+            return
+
+        subdomain = domain
+        if subdomain.endswith(".duckdns.org"):
+            subdomain = subdomain[:-12]
+
+        self.log(f"در حال همگام‌سازی دامنه {domain} با آی‌پی {pub_ip}...")
+        if hasattr(self, "lbl_ddns_status"):
+            self.lbl_ddns_status.config(text="در حال اتصال...", fg=self.accent_yellow)
+
+        def _worker():
+            success = False
+            err_msg = ""
+
+            if token:
+                direct_url = f"https://www.duckdns.org/update?domains={subdomain}&token={token}&ip={pub_ip}"
+                bridge_url = f"https://duckdns-bridge.leo-dream.workers.dev/?domains={subdomain}&token={token}&ip={pub_ip}"
+
+                # Detect if local proxy (e.g. Clash/Bettbox on 7890) is active
+                has_proxy = False
+                try:
+                    sp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sp.settimeout(0.3)
+                    if sp.connect_ex(('127.0.0.1', 7890)) == 0:
+                        has_proxy = True
+                    sp.close()
+                except Exception:
+                    pass
+
+                openers = []
+                if has_proxy:
+                    p_handler = urllib.request.ProxyHandler({'http': 'http://127.0.0.1:7890', 'https': 'http://127.0.0.1:7890'})
+                    openers.append(urllib.request.build_opener(p_handler))
+                openers.append(urllib.request.build_opener(urllib.request.ProxyHandler({})))
+
+                urls = [bridge_url, direct_url]
+                for op in openers:
+                    for u in urls:
+                        try:
+                            req = urllib.request.Request(u, headers={'User-Agent': 'Mozilla/5.0'})
+                            with op.open(req, timeout=10) as resp:
+                                body = resp.read().decode('utf-8').strip()
+                                if "OK" in body:
+                                    success = True
+                                    break
+                        except Exception as e:
+                            err_msg = str(e)
+                    if success:
+                        break
+            else:
+                # Custom domain without token (managed externally or Cloudflare DNS)
+                success = True
+
+            def _update_ui():
+                if success:
+                    if hasattr(self, "lbl_ddns_status"):
+                        self.lbl_ddns_status.config(text="همگام شد ✅", fg=self.accent_green)
+                    self.log(f"دامنه {domain} با موفقیت به آی‌پی {pub_ip} متصل شد. ✅")
+                    if manual:
+                        messagebox.showinfo("موفقیت", f"دامنه {domain} با موفقیت به آی‌پی اینترنت شما ({pub_ip}) متصل گردید!")
+                else:
+                    if hasattr(self, "lbl_ddns_status"):
+                        self.lbl_ddns_status.config(text="خطا در اتصال ❌", fg=self.accent_red)
+                    self.log(f"خطا در همگام‌سازی دامنه {domain}: {err_msg}")
+                    if manual:
+                        messagebox.showwarning("خطا در همگام‌سازی", f"امکان به‌روزرسانی دامنه فراهم نشد:\n{err_msg}")
+            self.root.after(0, _update_ui)
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def check_initial_status(self):
         pid = get_syncplay_pid()
@@ -1307,6 +1459,8 @@ class SyncplayManagerApp:
             bg=self.accent_red,
             activebackground="#c0392b"
         )
+        if getattr(self, "var_enable_ddns", None) and self.var_enable_ddns.get():
+            self.sync_ddns_action(manual=False)
 
     def set_ui_offline(self):
         self.status_indicator.config(fg=self.accent_red)
@@ -1400,6 +1554,12 @@ class SyncplayManagerApp:
         self.config["public_ip"] = pub_ip
         self.config["local_ip"] = loc_ip
         self.local_ip = loc_ip
+        if hasattr(self, "var_enable_ddns"):
+            self.config["enable_ddns"] = self.var_enable_ddns.get()
+        if hasattr(self, "entry_ddns_domain"):
+            self.config["ddns_domain"] = self.entry_ddns_domain.get().strip()
+        if hasattr(self, "entry_ddns_token"):
+            self.config["ddns_token"] = self.entry_ddns_token.get().strip()
         save_config(self.config)
         self.log(f"تنظیمات ذخیره شد: پورت {port} | رمز {'***' if pwd else '(بدون رمز)'} | اتاق {room}")
         self.check_firewall_status_real()
@@ -1420,11 +1580,14 @@ class SyncplayManagerApp:
         pwd = self.entry_pass.get().strip()
         room = self.entry_room.get().strip() or "cinema"
         pub_ip = self.entry_public_ip.get().strip()
+        use_ddns = getattr(self, "var_enable_ddns", None) and self.var_enable_ddns.get()
+        ddns_domain = self.entry_ddns_domain.get().strip() if hasattr(self, "entry_ddns_domain") else ""
 
-        if not pub_ip:
+        target_host = ddns_domain if (use_ddns and ddns_domain) else pub_ip
+        if not target_host:
             messagebox.showwarning(
-                "آی‌پی اینترنت خالی است",
-                "لطفاً ابتدا دکمه 'استعلام آی‌پی اینترنت' را بزنید یا آی‌پی عمومی مودم را در کادر مربوطه وارد کنید."
+                "آدرس سرور خالی است",
+                "لطفاً ابتدا دکمه 'استعلام آی‌پی اینترنت' را بزنید یا دامنه DDNS خود را وارد کنید."
             )
             return
 
@@ -1433,7 +1596,7 @@ class SyncplayManagerApp:
         formatted_message = (
             "🎬 مشخصات اتصال به سرور سینک‌پلی:\n\n"
             "🔹 آدرس سرور (Server address):\n"
-            f"`{pub_ip}:{port}`\n\n"
+            f"`{target_host}:{port}`\n\n"
             "🔹 رمز عبور (Server password):\n"
             f"{pwd_line}\n\n"
             "🔹 نام اتاق (Default room):\n"
@@ -1445,7 +1608,7 @@ class SyncplayManagerApp:
         self.root.clipboard_append(formatted_message)
         messagebox.showinfo(
             "کپی شد! 🎉",
-            "پیام آماده برای ارسال به دوستتان با فرمت هوشمند تلگرام در کلیپ‌بورد کپی شد!\nکافیست در تلگرام برایش ارسال کنید."
+            f"مشخصات اتصال بر پایه {'دامنه داینامیک (' + target_host + ')' if target_host == ddns_domain else 'آی‌پی اینترنت'} در کلیپ‌بورد کپی شد!\nکافیست در تلگرام برای دوستتان ارسال کنید."
         )
 
     def start_monitoring_thread(self):

@@ -7,5 +7,8 @@
   "syncplay_dir": "",
   "router_gateway_ip": "192.168.1.1",
   "enable_logs": true,
-  "enable_sound_alerts": true
+  "enable_sound_alerts": true,
+  "enable_ddns": false,
+  "ddns_domain": "syncplay.duckdns.org",
+  "ddns_token": ""
 }

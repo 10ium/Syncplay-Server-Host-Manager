@@ -16,7 +16,7 @@ from tkinter import ttk, messagebox, filedialog
 
 # Application Metadata
 APP_NAME = "Syncplay Server Host Manager"
-APP_VERSION = "v1.0.5"
+APP_VERSION = "v1.0.6"
 APP_TITLE = f"🎬 {APP_NAME} {APP_VERSION} | کنترل پنل سرور سینک‌پلی"
 
 # Strip ghost proxy environment variables so connections don't hang on dead 127.0.0.1:7890
@@ -1215,19 +1215,21 @@ class SyncplayManagerApp:
         threading.Thread(target=self.fetch_public_ip, daemon=True).start()
 
     def fetch_public_ip(self):
-        # Parallel multi-endpoint IP detection including user-verified get.geojs.io and unblocked endpoints
+        # Parallel multi-endpoint IP detection prioritizing unblocked direct plain-text endpoints
         candidate_urls = [
-            "https://get.geojs.io/v1/ip",
-            "http://get.geojs.io/v1/ip",
-            "http://icanhazip.com",
             "http://api.ip.sb/ip",
-            "https://api.ip.sb/ip",
+            "http://icanhazip.com",
             "http://ident.me",
-            "http://api.myip.la",
-            "https://api.myip.la",
             "http://www.l2.io/ip",
+            "http://api.myip.la",
+            "http://1.1.1.1/cdn-cgi/trace",
             "https://1.1.1.1/cdn-cgi/trace",
-            "http://1.1.1.1/cdn-cgi/trace"
+            "https://api.ip.sb/ip",
+            "https://icanhazip.com",
+            "https://ident.me",
+            "https://api.myip.la",
+            "https://get.geojs.io/v1/ip",
+            "http://get.geojs.io/v1/ip"
         ]
         import ssl
         ctx = ssl.create_default_context()
@@ -1238,15 +1240,24 @@ class SyncplayManagerApp:
         def _probe_single(url):
             try:
                 req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
-                with direct_opener.open(req, timeout=8) as r:
+                with direct_opener.open(req, timeout=6) as r:
                     raw = r.read().decode('utf-8', errors='ignore').strip()
-                    m = re.search(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', raw)
-                    if m:
-                        candidate_ip = m.group(0)
-                        if not candidate_ip.startswith("198.18.") and not candidate_ip.startswith("127.") and not candidate_ip.startswith("169.254.") and not candidate_ip.startswith("192.168."):
-                            parts = candidate_ip.split('.')
-                            if all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
-                                return candidate_ip, url
+                    if 'trace' in url:
+                        m = re.search(r'ip=([0-9\.]+)', raw)
+                        candidate_ip = m.group(1) if m else None
+                    else:
+                        m = re.search(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', raw)
+                        candidate_ip = m.group(0) if m else None
+
+                    if candidate_ip:
+                        # Exclude DNS resolvers (1.1.1.1, 1.0.0.1) and private / fake-IP ranges
+                        if candidate_ip in ("1.1.1.1", "1.0.0.1"):
+                            return None
+                        if candidate_ip.startswith(("198.18.", "127.", "169.254.", "192.168.", "10.")):
+                            return None
+                        parts = candidate_ip.split('.')
+                        if len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
+                            return candidate_ip, url
             except Exception:
                 pass
             return None

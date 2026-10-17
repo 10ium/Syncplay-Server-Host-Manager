@@ -10,5 +10,6 @@
   "enable_sound_alerts": true,
   "enable_ddns": false,
   "ddns_domain": "syncplay.duckdns.org",
-  "ddns_token": ""
+  "ddns_token": "",
+  "minimize_to_tray": true
 }

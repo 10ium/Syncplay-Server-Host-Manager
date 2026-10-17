@@ -14,9 +14,17 @@ import psutil
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
+try:
+    from PIL import Image
+    import pystray
+    import pystray._win32
+    HAS_TRAY = True
+except Exception:
+    HAS_TRAY = False
+
 # Application Metadata
 APP_NAME = "Syncplay Server Host Manager"
-APP_VERSION = "v1.0.7"
+APP_VERSION = "v1.0.8"
 APP_TITLE = f"🎬 {APP_NAME} {APP_VERSION} | کنترل پنل سرور سینک‌پلی"
 
 # Strip ghost proxy environment variables so connections don't hang on dead 127.0.0.1:7890
@@ -65,7 +73,8 @@ DEFAULT_CONFIG = {
     "enable_sound_alerts": True,
     "enable_ddns": False,
     "ddns_domain": "syncplay.duckdns.org",
-    "ddns_token": ""
+    "ddns_token": "",
+    "minimize_to_tray": True
 }
 
 def detect_gateway_ip():
@@ -252,13 +261,23 @@ class SyncplayManagerApp:
         self.accent_cyan = "#00d2d3"
         self.telegram_color = "#229ED9"
 
+        # System Tray State
+        self.tray_icon = None
+        self.is_in_tray = False
+        self.var_minimize_to_tray = tk.BooleanVar(value=self.config.get("minimize_to_tray", True))
+
         self.root.configure(bg=self.bg_color)
+        self.root.protocol("WM_DELETE_WINDOW", self.on_window_close)
         self.setup_ui()
 
         # Initial checks
         self.check_initial_status()
         self.check_firewall_status_real()
         self.start_monitoring_thread()
+
+        # Start System Tray Icon
+        if HAS_TRAY:
+            self.init_tray_icon()
 
     def apply_app_icon(self):
         """Set native window icon"""
@@ -685,7 +704,21 @@ class SyncplayManagerApp:
             font=("Segoe UI", 8),
             command=self.save_sound_pref
         )
-        chk_sound.pack(side="left")
+        chk_sound.pack(side="left", padx=(0, 8))
+
+        chk_tray = tk.Checkbutton(
+            cfg_top,
+            text="📥 حداقل‌سازی در سیستم تری (کنار ساعت)",
+            variable=self.var_minimize_to_tray,
+            bg=self.card_bg,
+            fg=self.accent_purple,
+            selectcolor=self.input_bg,
+            activebackground=self.card_bg,
+            activeforeground=self.accent_purple,
+            font=("Segoe UI", 8),
+            command=self.save_tray_pref
+        )
+        chk_tray.pack(side="left")
 
         cfg_form = tk.Frame(cfg_card, bg=self.card_bg)
         cfg_form.pack(fill="x", pady=2)
@@ -1021,6 +1054,10 @@ class SyncplayManagerApp:
 
     def save_sound_pref(self):
         self.config["enable_sound_alerts"] = self.var_sound_alert.get()
+        save_config(self.config)
+
+    def save_tray_pref(self):
+        self.config["minimize_to_tray"] = self.var_minimize_to_tray.get()
         save_config(self.config)
 
     def log(self, message):
@@ -1461,6 +1498,7 @@ class SyncplayManagerApp:
         )
         if getattr(self, "var_enable_ddns", None) and self.var_enable_ddns.get():
             self.sync_ddns_action(manual=False)
+        self.update_tray_state()
 
     def set_ui_offline(self):
         self.status_indicator.config(fg=self.accent_red)
@@ -1479,6 +1517,7 @@ class SyncplayManagerApp:
         self.lbl_speed.config(text="0.0 KB/s")
         self.lbl_total_data.config(text="0 B")
         self.lbl_ram.config(text="0 MB")
+        self.update_tray_state()
 
     def toggle_server(self):
         pid = get_syncplay_pid()
@@ -1560,6 +1599,8 @@ class SyncplayManagerApp:
             self.config["ddns_domain"] = self.entry_ddns_domain.get().strip()
         if hasattr(self, "entry_ddns_token"):
             self.config["ddns_token"] = self.entry_ddns_token.get().strip()
+        if hasattr(self, "var_minimize_to_tray"):
+            self.config["minimize_to_tray"] = self.var_minimize_to_tray.get()
         save_config(self.config)
         self.log(f"تنظیمات ذخیره شد: پورت {port} | رمز {'***' if pwd else '(بدون رمز)'} | اتاق {room}")
         self.check_firewall_status_real()
@@ -1610,6 +1651,117 @@ class SyncplayManagerApp:
             "کپی شد! 🎉",
             f"مشخصات اتصال بر پایه {'دامنه داینامیک (' + target_host + ')' if target_host == ddns_domain else 'آی‌پی اینترنت'} در کلیپ‌بورد کپی شد!\nکافیست در تلگرام برای دوستتان ارسال کنید."
         )
+
+    # -------------------------------------------------------------
+    # System Tray Integration (pystray)
+    # -------------------------------------------------------------
+    def get_tray_menu(self):
+        pid = get_syncplay_pid()
+        is_online = (pid is not None)
+        status_text = f"🟢 وضعیت سرور: روشن (پورت {self.running_port})" if is_online else "🔴 وضعیت سرور: خاموش"
+        toggle_text = "⏹ خاموش کردن سرور" if is_online else "▶ روشن کردن سرور"
+
+        return pystray.Menu(
+            pystray.MenuItem("🎬 نمایش کنترل پنل", self.restore_from_tray, default=True),
+            pystray.MenuItem(status_text, lambda icon, item: None, enabled=False),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("📋 کپی مشخصات برای دوستان", lambda icon, item: self.root.after(0, self.copy_friend_info)),
+            pystray.MenuItem(toggle_text, lambda icon, item: self.root.after(0, self.toggle_server)),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("❌ خروج کامل", self.exit_app_completely)
+        )
+
+    def init_tray_icon(self):
+        if not HAS_TRAY:
+            return
+        try:
+            icon_img_path = ICON_PNG if os.path.isfile(ICON_PNG) else ICON_ICO
+            if not os.path.isfile(icon_img_path):
+                return
+            img = Image.open(icon_img_path)
+            self.tray_icon = pystray.Icon(
+                "SyncplayServerHostManager",
+                img,
+                f"{APP_NAME} - خاموش 🔴",
+                self.get_tray_menu()
+            )
+            tray_thread = threading.Thread(target=self.tray_icon.run, daemon=True)
+            tray_thread.start()
+        except Exception as e:
+            print(f"Error initializing tray icon: {e}")
+
+    def update_tray_state(self):
+        if not self.tray_icon:
+            return
+        try:
+            pid = get_syncplay_pid()
+            is_online = (pid is not None)
+            self.tray_icon.title = f"{APP_NAME} - {'روشن 🟢' if is_online else 'خاموش 🔴'}"
+            self.tray_icon.menu = self.get_tray_menu()
+        except Exception:
+            pass
+
+    def hide_to_tray(self):
+        self.root.withdraw()
+        self.is_in_tray = True
+        if self.tray_icon:
+            try:
+                self.tray_icon.notify(
+                    "سرور سینک‌پلی در پس‌زمینه همچنان فعال است.\nبرای مشاهده کنترل پنل روی آیکون کنار ساعت دابل‌کلیک کنید.",
+                    f"{APP_NAME} {APP_VERSION}"
+                )
+            except Exception:
+                pass
+
+    def restore_from_tray(self, icon=None, item=None):
+        def _restore():
+            self.root.deiconify()
+            self.root.state("normal")
+            self.root.lift()
+            self.root.focus_force()
+            self.is_in_tray = False
+
+        if threading.current_thread() is threading.main_thread():
+            _restore()
+        else:
+            self.root.after(0, _restore)
+
+    def on_window_close(self):
+        if hasattr(self, "var_minimize_to_tray") and self.var_minimize_to_tray.get() and HAS_TRAY:
+            self.hide_to_tray()
+        else:
+            pid = get_syncplay_pid()
+            if pid:
+                confirm = messagebox.askyesno(
+                    "خروج از برنامه",
+                    "سرور سینک‌پلی در حال حاضر فعال است.\n\nآیا مایلید سرور خاموش شده و برنامه کاملاً بسته شود؟\n(برای اینکه سرور در پس‌زمینه فعال بماند، گزینه حداقل‌سازی در سیستم‌تری را در تنظیمات فعال کنید)"
+                )
+                if not confirm:
+                    return
+            self.exit_app_completely()
+
+    def exit_app_completely(self, icon=None, item=None):
+        def _do_exit():
+            self.is_monitoring = False
+            try:
+                kill_syncplay_processes()
+            except Exception:
+                pass
+            if self.tray_icon:
+                try:
+                    self.tray_icon.stop()
+                except Exception:
+                    pass
+            try:
+                self.root.destroy()
+            except Exception:
+                pass
+            sys.exit(0)
+
+        if threading.current_thread() is threading.main_thread():
+            _do_exit()
+        else:
+            self.root.after(0, _do_exit)
 
     def start_monitoring_thread(self):
         def _monitor():

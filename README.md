@@ -1,4 +1,4 @@
-# 🎬 Syncplay Server Host Manager (Windows) `v1.0.7`
+# 🎬 Syncplay Server Host Manager (Windows) `v1.0.8`
 
 <p align="center">
   <img src="assets/icon.png" width="128" height="128" alt="Syncplay Server Host Manager Icon" />
@@ -6,12 +6,12 @@
 
 <p align="center">
   <b>یک کنترل پنل سبک، مدرن، حرفه‌ای و متن‌باز برای مدیریت و میزبانی سرورهای خصوصی Syncplay روی ویندوز</b><br>
-  <i>A lightweight, modern, and open-source desktop control panel for hosting private Syncplay servers on Windows with dynamic DDNS support.</i>
+  <i>A lightweight, modern, and open-source desktop control panel for hosting private Syncplay servers on Windows with DDNS and System Tray support.</i>
 </p>
 
 <p align="center">
   <a href="https://t.me/vpnclashfa"><img src="https://img.shields.io/badge/Telegram-Channel-229ED9?style=flat&logo=telegram&logoColor=white" alt="Telegram Channel" /></a>
-  <img src="https://img.shields.io/badge/Version-1.0.7-blue.svg" alt="Version 1.0.7" />
+  <img src="https://img.shields.io/badge/Version-1.0.8-blue.svg" alt="Version 1.0.8" />
   <img src="https://img.shields.io/badge/Python-3.8+-brightgreen.svg" alt="Python 3.8+" />
   <img src="https://img.shields.io/badge/Platform-Windows-0078D6?style=flat&logo=windows&logoColor=white" alt="Windows" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
@@ -21,7 +21,8 @@
 
 ## ✨ امکانات و قابلیت‌ها (Key Features)
 
-- **⚡ فوق‌العاده سبک و بهینه (Ultra-Lightweight):** مصرف حافظه رم کمتر از ۳۰ مگابایت؛ ساخته شده با پایتون و Tkinter بومی بدون نیاز به مروگرهای سنگین یا الکترون.
+- **⚡ فوق‌العاده سبک و بهینه (Ultra-Lightweight):** مصرف حافظه رم کمتر از ۳۰ مگابایت؛ ساخته شده با پایتون و Tkinter بومی بدون نیاز به مرورگرهای سنگین یا الکترون.
+- **📥 اجرای پس‌زمینه در سیستم‌تری (Minimize to System Tray):** امکان بستن پنجره و هدایت برنامه به کنار ساعت ویندوز جهت ادامه فعالیت پایدار سرور بدون مزاحمت، دارای منوی راست‌کلیک فارسی با دسترسی سریع به وضعیت، کپی مشخصات تلگرامی، روشن/خاموش کردن سرور و خروج کامل.
 - **▶️ روشن و خاموش کردن تک‌کلیکی سرور (One-Click Server Control):** اجرای ایزوله و مطمئن پردازه `syncplayServer.exe` بدون پنجره‌های مزاحم CMD.
 - **🌐 پشتیبانی کامل از دامنه ثابت و داینامیک (DDNS & DuckDNS Integration):** اتصال خودکار سرور به دامنه‌های رایگان DuckDNS یا هر دامنه دلخواه اینترنتی، تا نیازی به ارسال مکرر آی‌پی‌های متغیر مودم به دوستان نباشد؛ به همراه به‌روزرسانی خودکار آی‌پی در پس‌زمینه هنگام روشن شدن سرور.
 - **🛡️ استعلام آنی آی‌پی عمومی بدون نیاز به فیلترشکن (Zero-VPN Public IP Detection):** شناسایی بلادرنگ آی‌پی اینترنت از طریق سرورهای پایدار و پرسرعت (حتی در زمان قطعی کامل فیلترشکن یا مسدود بودن اینترنت بین‌الملل) با دور زدن خودکار پروکسی‌های مرده ویندوز.
@@ -51,9 +52,9 @@
 اگر مایلید مستقیماً از سورس‌کد پایتون استفاده کنید:
 1. پایتون نسخه ۳.۸ یا بالاتر نصب باشد ([Python.org](https://www.python.org/downloads/)).
 2. برنامه رسمی **Syncplay** روی سیستم نصب باشد ([Syncplay.pl](https://syncplay.pl/)).
-3. کتابخانه پایتون `psutil`:
+3. نصب پیش‌نیازها:
 ```bash
-pip install psutil
+pip install -r requirements.txt
 ```
 
 ### اجرا:
